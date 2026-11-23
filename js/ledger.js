@@ -307,8 +307,40 @@ export function pendingTransfers({ players, roster, organizer = null }) {
 }
 
 function organizerOf(organizer) {
-  if (typeof organizer === 'string') return { uid: '', name: organizer };
-  return { uid: String(organizer?.uid || '').trim(), name: String(organizer?.name || '').trim() };
+  if (typeof organizer === 'string') return { uid: '', name: organizer, token: '' };
+  return {
+    uid: String(organizer?.uid || '').trim(),
+    name: String(organizer?.name || '').trim(),
+    token: String(organizer?.token || '').trim(),
+  };
+}
+
+/**
+ * Autoservicio sin organizador: sin uid ni Se anotó con.
+ * En esas altas Agregó quedó con el nombre del propio jugador, no de un organizador.
+ */
+export function orphanSelfSignup(player) {
+  return player?.selfSignup === true
+    && !String(player?.addedByUid || '').trim()
+    && !String(player?.signedUpWith || '').trim()
+    && !String(player?.signedUpWithName || '').trim();
+}
+
+/**
+ * Dueño de un Autoservicio sin organizador: el del token del enlace si se conoce
+ * (tokens: Map o { token: { uid, name } }), si no el que creó el partido.
+ * Nunca el nombre del jugador. null si no hay forma de saberlo.
+ */
+export function orphanSelfSignupOwner(player, match = null, tokens = null) {
+  if (!orphanSelfSignup(player)) return null;
+  const token = String(player?.shareToken || '').trim();
+  if (token && tokens) {
+    const row = tokens instanceof Map ? tokens.get(token) : tokens[token];
+    const uid = String(row?.uid || '').trim();
+    if (uid) return { uid, name: String(row?.name || '').trim(), token };
+  }
+  const creator = String(match?.createdByUid || '').trim();
+  return creator ? { uid: creator, name: '', token: '' } : null;
 }
 
 /** Lo anotó este organizador: el uid con el que entró, o el nombre de Agregó. */
@@ -323,9 +355,16 @@ export function addedByOrganizer(player, organizer) {
  * La deuda es de quien se anotó (Se anotó con).
  * Si ese dato no está (jugadores viejos), queda el de Agregó.
  */
-export function owesOrganizer(player, organizer) {
+export function owesOrganizer(player, organizer, match = null) {
   const who = organizerOf(organizer);
   if (!who.uid && !who.name) return false;
+  if (orphanSelfSignup(player)) {
+    // El token del enlace es del organizador que lo compartió.
+    const token = String(player?.shareToken || '').trim();
+    if (token && who.token) return token === who.token;
+    const owner = orphanSelfSignupOwner(player, match);
+    return !!(owner && who.uid && owner.uid === who.uid);
+  }
   const uid = String(player?.signedUpWith || '').trim();
   const name = String(player?.signedUpWithName || '').trim();
   if (!uid && !name) return addedByOrganizer(player, organizer);
@@ -358,7 +397,7 @@ export function organizerMatchDebt({ match, players, matches, prices, organizer,
   if (!match || match.cancelled === true) return { total: 0, rows: [] };
   const rows = [];
   for (const player of players || []) {
-    if (player.matchId !== match.id || !owesOrganizer(player, organizer)) continue;
+    if (player.matchId !== match.id || !owesOrganizer(player, organizer, match)) continue;
     const owed = amountOwed(player, { players, matches, prices, watch, covered, settledDates });
     if (!(owed > 0)) continue;
     rows.push({ id: player.id || '', name: String(player.name || 'Sin nombre'), owed });
@@ -395,7 +434,7 @@ export function playerDebt({ person, players, matches, prices, organizer = null,
   for (const player of players || []) {
     const same = wanted ? personKey(player, players) === wanted : playerMatchesPerson(player, person);
     if (!same) continue;
-    if (organizer && !owesOrganizer(player, organizer)) continue;
+    if (organizer && !owesOrganizer(player, organizer, byId.get(player.matchId) || null)) continue;
     const owed = amountOwed(player, { players, matches, prices, watch, covered, settledDates });
     if (!(owed > 0)) continue;
     const match = byId.get(player.matchId);

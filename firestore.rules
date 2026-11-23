@@ -722,7 +722,7 @@ service cloud.firestore {
               && shareTokenData(d.shareToken).uid == d.addedByUid
               && d.addedBy == shareTokenData(d.shareToken).name
               && (matchData(d.matchId).get('createdByUid', '') == d.addedByUid
-                  || (matchData(d.matchId).keys().hasAny(['adders']) && matchData(d.matchId).adders is list && matchData(d.matchId).adders.hasAny([d.addedByUid]))));
+                  || (matchData(d.matchId).keys().hasAny(['adders']) && matchData(d.matchId).adders is list && matchData(d.matchId).adders.hasAny([d.addedByUid, '*']))));
     }
     function guestSignupShape(d) {
       return d.selfSignup == true
