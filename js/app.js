@@ -20,7 +20,7 @@ import { shortenExternal } from './shorten.js';
 import { PRIVATE_WA_TEXT } from './privacy.js';
 import { activityNoticeText, activityNotices } from './notify.js';
 import { ROSTER_DENIED_WRITE, SUSPENDED_TEXT, activeSuspensions, blockingSuspensions, canonicalPhone, capitalizeWords, cleanShortName, displayName, foldText, fullNameBehind, givenName, nickOf, isRosterDenied, personKey, phoneIdentity, playerMatchesPerson, rosterByIdentity, rosterByPhone, rosterForOrganizer, rosterHeldBy, rosterIdForSuspension, searchRoster, suspensionHistoryOf, visibleRosterHits, visibleRosterPhone, withPendingRoster } from './roster.js';
-import { ALREADY_IN_MATCH, alreadyInMatch, attachRosterGuest, firstDuplicate, groupByInviter, inviteBlock, isAutoGuestName, isGuest, normName, placeGroup, resolveFriendNames, rootInviterId, sameDayPromoGuestRenames, waitWarning } from './guests.js';
+import { ALREADY_IN_MATCH, alreadyInMatch, attachRosterGuest, duplicateText, isDuplicateText, firstDuplicate, groupByInviter, inviteBlock, isAutoGuestName, isGuest, normName, placeGroup, resolveFriendNames, rootInviterId, sameDayPromoGuestRenames, waitWarning } from './guests.js';
 import { MAX_NOTES, MAX_NOTE_TEXT, POSITIONS, currentMatches, filterLevelTyping, formatLevel, keptSignupIds, levelCaretAfterStep, levelStepSide, matchAlreadyPlayed, matchSignupState, noteWhen, parseLevel, pastMatches, playerRecord, playerStats, rosterDeleteReasons, sortedNotes, splitNear, stepLevel, storedLevel, upcomingMatches } from './profile.js';
 import { organizerChoices, organizerTagClass, sameOrganizer, sameOrganizerIdentity } from './organizers.js';
 import { EDIT_LOCK_TEXT, canEditPlayer, canEditRoster, canEditRosterNick, canWritePlayer } from './edit-lock.js';
@@ -49,7 +49,7 @@ import {
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v229';
+const APP_VERSION = 'f7c-v230';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -5312,7 +5312,7 @@ function bindPartidos(person) {
     run((async () => {
       for (const row of chosen) {
         const again = matchSignupState({ ...rosterIdentity(person), match: row.match, players: app.players });
-        if (again.existing) { toast(ALREADY_IN_MATCH); continue; }
+        if (again.existing) { toast(duplicateText(app.players.find((item) => item.id === again.playerId), { ...rosterIdentity(person), rosterId: person.id }) || ALREADY_IN_MATCH); continue; }
         if (playerBlockedOn(row.match, person)) { askNotice(blockedByText(row.match, person) || SUSPENDED_TEXT); continue; }
         const blocked = addBlock(row.match);
         if (blocked) { toast(blocked); continue; }
@@ -5323,7 +5323,7 @@ function bindPartidos(person) {
           });
           if (!again.willWait) await applyAutoCredit(pid);
         } catch (error) {
-          if (error?.code === 'already-in-match') { toast(ALREADY_IN_MATCH); continue; }
+          if (error?.code === 'already-in-match') { toast(error.message || ALREADY_IN_MATCH); continue; }
           throw error;
         }
       }
@@ -5408,7 +5408,7 @@ function bindGuestSuggest(field, hits, match) {
     hits.innerHTML = matches.map((person) => {
       const taken = match ? signupError(match.id, [{ name: person.name, phone: person.phone || '', rosterId: person.id, phoneKey: person.phoneKey, hasPhone: person.hasPhone === true }]) : '';
       const detail = [cleanShortName(person.shortName), person.phone ? displayFromWa(person.phone) : phoneHidden(person) ? PRIVATE_WA_TEXT : 'Sin número'].filter(Boolean).join(' · ');
-      return `<li><button type="button" class="roster-hit${taken ? ' taken' : ''}${fichaSuspended(person)}" data-pick="${esc(person.id)}"${taken ? ' disabled' : ''}><b>${fichaName(person, person.name)}</b><small>${esc(detail)}</small>${taken ? '<small class="taken">Ya anotado</small>' : ''}</button></li>`;
+      return `<li><button type="button" class="roster-hit${taken ? ' taken' : ''}${fichaSuspended(person)}" data-pick="${esc(person.id)}"${taken ? ' disabled' : ''}><b>${fichaName(person, person.name)}</b><small>${esc(detail)}</small>${taken ? `<small class="taken">${taken === ALREADY_IN_MATCH ? 'Ya anotado' : esc(taken)}</small>` : ''}</button></li>`;
     }).join('');
   };
   const choose = (id) => {
@@ -5473,7 +5473,8 @@ function friendNamesOf(matchId, hostId) {
 }
 
 function signupError(matchId, people) {
-  return firstDuplicate(matesOf(matchId), people) ? ALREADY_IN_MATCH : '';
+  const dup = firstDuplicate(matesOf(matchId), people);
+  return dup ? duplicateText(dup.hit, dup.person) : '';
 }
 
 function focusField(el) {
@@ -5848,7 +5849,7 @@ function openPlayerForm(m, p, opts = {}) {
         const taken = signupError(m.id, [{ name: person.name, phone: person.phone || '', rosterId: person.id, phoneKey: person.phoneKey, hasPhone: person.hasPhone === true }]);
         const detail = person.phone ? esc(displayFromWa(person.phone)) : phoneHidden(person) ? esc(PRIVATE_WA_TEXT) : 'Sin número';
         const on = person.id === pickedId;
-        return `<li><button type="button" class="roster-hit${taken ? ' taken' : ''}${on ? ' on' : ''}${fichaSuspended(person)}" data-pick="${esc(person.id)}"${on ? ' aria-pressed="true"' : ''}${taken ? ' disabled' : ''}><b>${fichaName(person, person.name)}</b><small>${detail}</small>${taken ? '<small class="taken">Ya anotado</small>' : ''}</button></li>`;
+        return `<li><button type="button" class="roster-hit${taken ? ' taken' : ''}${on ? ' on' : ''}${fichaSuspended(person)}" data-pick="${esc(person.id)}"${on ? ' aria-pressed="true"' : ''}${taken ? ' disabled' : ''}><b>${fichaName(person, person.name)}</b><small>${detail}</small>${taken ? `<small class="taken">${taken === ALREADY_IN_MATCH ? 'Ya anotado' : esc(taken)}</small>` : ''}</button></li>`;
       }).join('');
     };
     let pickedPhone = '';
@@ -6012,8 +6013,9 @@ function openPlayerForm(m, p, opts = {}) {
         invitedBy: p.invitedBy || '',
         guestAuto: stillAuto,
       };
-      if (alreadyInMatch(matesOf(m.id), candidate, { exceptId: p.id, roster: false })) {
-        $('#pf-err').textContent = ALREADY_IN_MATCH;
+      const twin = alreadyInMatch(matesOf(m.id), candidate, { exceptId: p.id, roster: false });
+      if (twin) {
+        $('#pf-err').textContent = duplicateText(twin, candidate);
         return;
       }
       const savingNewRoster = offerRoster && $('#save-roster')?.checked === true;
@@ -6022,8 +6024,10 @@ function openPlayerForm(m, p, opts = {}) {
       const nickChanged = nick !== nickBefore;
       if (savingNewRoster) {
         const known = rosterAlreadySaved(name, phoneForCheck);
-        if (known && alreadyInMatch(matesOf(m.id), { name: known.name, phone: known.phone || phoneForCheck, phoneKey: known.phoneKey, hasPhone: known.hasPhone === true, rosterId: known.id }, { exceptId: p.id })) {
-          $('#pf-err').textContent = ALREADY_IN_MATCH;
+        const knownCandidate = known ? { name: known.name, phone: known.phone || phoneForCheck, phoneKey: known.phoneKey, hasPhone: known.hasPhone === true, rosterId: known.id } : null;
+        const knownTwin = knownCandidate ? alreadyInMatch(matesOf(m.id), knownCandidate, { exceptId: p.id }) : null;
+        if (knownTwin) {
+          $('#pf-err').textContent = duplicateText(knownTwin, knownCandidate);
           return;
         }
       }
@@ -6043,8 +6047,9 @@ function openPlayerForm(m, p, opts = {}) {
         const id = saveRoster
           ? await linkedRosterId({ name, phone: phoneRaw === null ? '' : phone, rosterId: p.rosterId, phoneKey: p.phoneKey, phoneShared: share })
           : (p.rosterId || '');
-        if (savingNewRoster && id && alreadyInMatch(matesOf(m.id), { ...candidate, rosterId: id }, { exceptId: p.id })) {
-          toast(ALREADY_IN_MATCH);
+        const savedTwin = savingNewRoster && id ? alreadyInMatch(matesOf(m.id), { ...candidate, rosterId: id }, { exceptId: p.id }) : null;
+        if (savedTwin) {
+          toast(duplicateText(savedTwin, { ...candidate, rosterId: id }));
           return;
         }
         const patch = { name, ...(id ? { rosterId: id } : {}) };
@@ -6092,7 +6097,7 @@ function openPlayerForm(m, p, opts = {}) {
         }
       : { name, phone, phoneShared: $('#wa-share')?.checked === true };
     const result = await addSignedPlayer(m, host, asWait, !!$('#player-tentative')?.checked, friendRowValues(), { reveal: true });
-    if (result === ALREADY_IN_MATCH || result === SUSPENDED_TEXT) $('#pf-err').textContent = result;
+    if (isDuplicateText(result) || result === SUSPENDED_TEXT) $('#pf-err').textContent = result;
   };
 }
 
@@ -8625,7 +8630,7 @@ function openFriendForm(m, host) {
     // Los nombres salen de este partido; en los otros van los mismos (mismo anfitrión + nombre = misma persona).
     const resolved = guestsFromRows(rows, friendNamesOf(m.id, host.id));
     const result = await addSignedPlayer(m, host, host.waiting === true, false, rows, { resolved, also, reveal: true });
-    if (result === ALREADY_IN_MATCH || result === SUSPENDED_TEXT) $('#friend-err').textContent = result;
+    if (isDuplicateText(result) || result === SUSPENDED_TEXT) $('#friend-err').textContent = result;
   };
 }
 
