@@ -488,14 +488,18 @@ function dayCollected(matches, players, staff) {
  * Lo que le corresponde a esta persona en el día.
  * Solo entran los partidos de ese día que ya se jugaron. Hoy y los que faltan
  * no suman. Un cancelado tampoco.
- * Un solo organizador: todo lo cobrado.
- * Más de uno: su fila de dayCompensation («le corresponden»),
- * según el modo de cada partido (partes iguales o lo que anotó).
+ * Si el día tiene cálculo de compensación guardado, vale su fila de ahí.
+ * Si no: un solo organizador, todo lo cobrado. Más de uno: su fila de
+ * dayCompensation según el modo de cada partido. En partes iguales entran
+ * todos los que pueden anotar en el partido (canAdd), anoten o no.
  * No es la suma de lo que cobraron todos.
  */
-export function organizerDayShare({ matches, players, staff, uid, name, who, now = Date.now() } = {}) {
+export function organizerDayShare({ matches, players, staff, uid, name, who, saved = null, now = Date.now() } = {}) {
   const played = (matches || []).filter((match) => matchAlreadyPlayed(match, now));
   const person = who && typeof who === 'object' ? who : { uid: uid || '', name: name || '' };
+  if (!played.some((match) => match?.cancelled !== true)) return 0;
+  // Con cálculo guardado manda lo guardado: «le corresponden» de su fila.
+  if (Array.isArray(saved?.rows)) return savedShare(saved, person);
   const people = staffForShare(staff, played, players);
   const dayMatches = played.map((match) => matchForShare(match, people));
   const organizers = dayOrganizers(dayMatches, people);
@@ -510,6 +514,17 @@ export function organizerDayShare({ matches, players, staff, uid, name, who, now
     || calc.rows.find((item) => isThisOrganizer(item, person))
     || null;
   return roundARS(row?.entitled || 0);
+}
+
+/** Lo que le toca según el cálculo de compensación guardado. Sin fila, nada. */
+export function savedShare(saved, who) {
+  const person = who && typeof who === 'object' ? who : { uid: '', name: '' };
+  const rows = Array.isArray(saved?.rows) ? saved.rows : [];
+  const id = String(person.uid || '').trim();
+  const row = (id && rows.find((item) => item?.uid === id))
+    || rows.find((item) => item && isThisOrganizer(item, person))
+    || null;
+  return roundARS(Number(row?.entitled) || 0);
 }
 
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -605,9 +620,9 @@ export function playerOrganizerMonths({ person, players, matches, who, now = Dat
  * con los partidos de ese día que ya se jugaron.
  * Un día con varios partidos entra una sola vez. Uno con un solo
  * organizador suma lo que esa función le asigna.
- * Mes y Año no recortan por el cálculo guardado: suman los días ya jugados.
+ * Mes y Año suman los días ya jugados; un día con cálculo guardado usa lo guardado.
  */
-export function organizerShareByPeriod({ matches, players, staff, uid, name, who, grain = 'month', now = Date.now() } = {}) {
+export function organizerShareByPeriod({ matches, players, staff, uid, name, who, grain = 'month', savedFor = null, now = Date.now() } = {}) {
   const byDay = new Map();
   for (const match of matches || []) {
     if (!match?.id || !/^\d{4}-\d{2}-\d{2}$/.test(match.date || '')) continue;
@@ -618,7 +633,8 @@ export function organizerShareByPeriod({ matches, players, staff, uid, name, who
   for (const [date, dayMatches] of byDay) {
     const key = grain === 'year' ? date.slice(0, 4) : monthKeyOf(date);
     if (!key) continue;
-    const share = organizerDayShare({ matches: dayMatches, players, staff, uid, name, who, now });
+    const saved = typeof savedFor === 'function' ? savedFor(date) : null;
+    const share = organizerDayShare({ matches: dayMatches, players, staff, uid, name, who, saved, now });
     totals.set(key, roundARS((totals.get(key) || 0) + share));
   }
   return totals;
