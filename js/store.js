@@ -89,7 +89,7 @@ import { blocksProductionFirebase, isTrialPage } from './trial.js';
 import { toEpoch, todayISO } from './dates.js';
 import { COMP_LISTEN, CONFIRM_LISTEN, PLAYER_LISTEN, USAGE_FLUSH_MS, meterFirestore, quotaDay, recentCutoff, usageFlushDecision, UsageMeter } from './usage.js';
 import { chunkList, rosterDatesOf } from './roster-load.js';
-import { guestListenPlan, HISTORY_PAGE, historyBounds, historyCaption, historyPageMerge, historyWindow, matchAlreadyPlayed, matchQueryPlan, playerVisibleBackfill, rosterDeleteReasons, storedLevel } from './profile.js';
+import { guestListenPlan, HISTORY_PAGE, playerLinkKey, historyBounds, historyCaption, historyPageMerge, historyWindow, matchAlreadyPlayed, matchQueryPlan, playerVisibleBackfill, rosterDeleteReasons, storedLevel } from './profile.js';
 import { paymentRecord, receivePendingTransfer } from './payments.js';
 import { creditDocId, nextCredit } from './credit.js';
 import { MAX_PRICE } from './prices.js';
@@ -102,7 +102,7 @@ import { bumpGoals, bumpScore, dropPlayer, nextInGoalAt, scoreRecord, teamsRecor
 import { confirmationIdentity, confirmationRecord, newConfirmToken, overlayConfirmations, upcomingConfirmSlots } from './reminders.js';
 import { isShortCode, newShortCode } from './short.js';
 import { acceptedExternalShort } from './shorten.js';
-import { ALREADY_IN_MATCH, alreadyInMatch, inviteBlock, isAutoGuestName, sameDayPromoGuestEditPatches, sameDayPromoGuestNickPatches } from './guests.js';
+import { ALREADY_IN_MATCH, ALREADY_SIGNED_UP, alreadyInMatch, selfAlreadyInMatch, selfSignupPlayerId, inviteBlock, isAutoGuestName, sameDayPromoGuestEditPatches, sameDayPromoGuestNickPatches } from './guests.js';
 import { EVERYONE, accessPatch, canAdd, canView, playerAccess } from './access.js';
 import { ROSTER_DENIED_READ, SUSPENDED_TEXT, blockingSuspensions, capitalizeWords, cleanShortName, cleanSuspensionHistory, cleanSuspensionNote, isRosterDenied, legacyNoteOwnerUid, liftedSuspensionEvent, personKey, phoneIdentity, rosterHeldBy, rosterHolderIds, rosterIdForSuspension, rosterNoteDocId, rosterPhoneAction, suspensionDocId, withHolder } from './roster.js';
 import { PRIVATE_WA_TEXT, attachPhone, canonicalWa, phoneKey } from './privacy.js';
@@ -234,6 +234,9 @@ function refuseSuspended(suspensions, roster, match, data) {
   if (blockingSuspensions(suspensions, match, rosterId).length) {
     throw Object.assign(new Error(SUSPENDED_TEXT), { code: 'suspended' });
   }
+}
+function refuseSelfDuplicate(mates, person) {
+  if (selfAlreadyInMatch(mates, person)) throw Object.assign(new Error(ALREADY_SIGNED_UP), { code: 'already-in-match' });
 }
 function refuseDuplicate(mates, data, exceptId = '') {
   const name = String(data?.name || '').trim();
@@ -1058,6 +1061,7 @@ class LocalStore {
   async selfJoin(match, person, { waiting = false, organizer = null } = {}) {
     const rosterId = String(person?.id || '').trim();
     const db = this._load();
+    refuseSelfDuplicate(Object.entries(db.players || {}).filter(([, row]) => row.matchId === match.id).map(([pid, row]) => ({ id: pid, ...row })), { ...person, id: rosterId });
     this._chargeSignupRate(db, rosterId);
     this._save(db);
     const org = linkStamp(organizer, person);
@@ -3342,6 +3346,23 @@ export class FirebaseStore {
     }
     apply(this._ownShareToken || '');
   }
+  /**
+   * Token del enlace para un jugador que anota el organizador. Con eso la ficha
+   * lo ve anotado aunque el partido sea «solo yo»: la consulta del enlace pide
+   * shareToken == token y su rosterId. Primero el playerKey del partido (el
+   * enlace de quien lo creó), si no el del organizador que anota.
+   * Vacío si el partido no es para jugadores.
+   */
+  async _playerLinkToken(match) {
+    if (this._guest || !this.actor?.uid || match?.playerVisible === false) return '';
+    const key = playerLinkKey(match, match?.playerKey);
+    if (key) return key;
+    if (!this._ownShareToken && this.fs?.getDocs) {
+      try { this._ownShareToken = await this.ensureShareToken(this.actor.uid, this.actor.name || ''); }
+      catch { this._ownShareToken = ''; }
+    }
+    return playerLinkKey(match, this._ownShareToken);
+  }
   async _playerKeyPatch(body) {
     if (!body || this._guest || !this.actor?.uid || !this.fs?.getDocs) return body;
     if (body.playerVisible === false) {
@@ -3875,6 +3896,8 @@ export class FirebaseStore {
     const hold = (opts.tentative === true || selfHold) && !waiting;
     const canon = canonicalWa(data.phone || '');
     const uid = this.actor?.uid || '';
+    const selfRow = selfHold || opts.selfSignup === true;
+    const linkToken = !selfRow && rosterId ? await this._playerLinkToken(this.state.matches.find((item) => item.id === match.id) || match) : '';
     const player = {
       matchId: match.id, matchDate: match.date, name: cleanPersonName(data.name), phone: '',
       addedBy: opts.addedBy || who, addedByUid: opts.addedByUid !== undefined ? opts.addedByUid : uid, createdAt: now, updatedAt: now,
@@ -3891,6 +3914,7 @@ export class FirebaseStore {
       ...signupWith(data, this.actor),
       ...(cleanShortName(data.shortName) ? { shortName: cleanShortName(data.shortName) } : {}),
       ...(selfHold || opts.selfSignup === true ? { selfSignup: true } : {}),
+      ...(linkToken ? { shareToken: linkToken } : {}),
     };
     const ref = opts.id
       ? doc(this.db, 'players', opts.id)
@@ -3966,8 +3990,9 @@ export class FirebaseStore {
     if (!this.actor?.uid) return this._guestSelfJoin(match, person, { waiting, organizer });
     const rosterId = String(person?.id || '').trim();
     if (!rosterId) throw Object.assign(new Error('No tiene ficha.'), { code: 'no-roster' });
+    refuseSelfDuplicate(this.state.players.filter((row) => row.matchId === match.id), { ...person, id: rosterId });
     const org = linkStamp(organizer, person);
-    const id = rid();
+    const id = selfSignupPlayerId(match.id, rosterId) || rid();
     await this._chargeSignupRate(rosterId, id);
     const playerId = await this.addPlayer(match, {
       name: person?.name || '',
@@ -4085,11 +4110,13 @@ export class FirebaseStore {
   async _guestSelfJoin(match, person, { waiting = false, organizer = null } = {}) {
     const rosterId = String(person?.id || '').trim();
     if (!rosterId) throw Object.assign(new Error('No tiene ficha.'), { code: 'no-roster' });
+    const mates = this.state.players.filter((row) => row.matchId === match.id);
+    refuseSelfDuplicate(mates, { ...person, id: rosterId });
+    const id = selfSignupPlayerId(match.id, rosterId);
+    if (!id) throw Object.assign(new Error('No tiene ficha.'), { code: 'no-roster' });
     const org = await this._linkOrganizer(organizer);
-    const id = rid();
     await this._chargeSignupRate(rosterId, id);
     const now = Date.now();
-    const mates = this.state.players.filter((row) => row.matchId === match.id);
     const access = playerAccess(match);
     const onWait = waiting === true;
     const player = {

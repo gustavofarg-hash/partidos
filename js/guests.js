@@ -4,6 +4,32 @@
 import { cleanShortName, foldText, guestHostKey, isNamedGuest, phoneIdentity } from './roster.js';
 
 export const ALREADY_IN_MATCH = 'Ya está anotado en este partido';
+/** Lo que ve el jugador si intenta anotarse dos veces. */
+export const ALREADY_SIGNED_UP = 'Ya estás anotado en este partido.';
+
+/**
+ * Id fijo del alta por Autoservicio: un documento por partido y ficha.
+ * Dos toques, dos pestañas o una carrera chocan contra el mismo documento
+ * y las reglas no dejan pisarlo. Vacío si falta alguno de los dos.
+ */
+export function selfSignupPlayerId(matchId, rosterId) {
+  const match = String(matchId || '').trim();
+  const roster = String(rosterId || '').trim();
+  if (!match || !roster || match.includes('/') || roster.includes('/')) return '';
+  return `${match}__${roster}`;
+}
+
+/** El jugador de esta ficha ya está en el partido: por ficha, o mismo nombre sin otro teléfono. */
+export function selfAlreadyInMatch(mates, person) {
+  const rosterId = String(person?.id || person?.rosterId || '').trim();
+  return alreadyInMatch(mates, {
+    name: person?.name || '',
+    phone: person?.phone || '',
+    phoneKey: person?.phoneKey || '',
+    hasPhone: person?.hasPhone === true,
+    rosterId,
+  }, { roster: true });
+}
 export const GUEST_CANNOT_INVITE = 'Un invitado no puede agregar invitados.';
 
 export function isGuest(player) {

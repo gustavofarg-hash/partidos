@@ -9,14 +9,17 @@ import { selfMoveEntry } from '../js/log.js';
 
 const ROSTER = 'NZpoLFKUUh044kfNGSmR';
 const MATCH = '2026-11-17_1700';
+const MATCH2 = '2026-11-17_1900';
+// Id fijo del Autoservicio: partido__ficha (selfSignupPlayerId).
+const selfId = (matchId) => `${matchId}__${ROSTER}`;
 const SHARE = 'abcdefghijklmnopqrstuvwx';
 const ORG = 'orgGustavoUid123456';
 const NAME = 'Ángel Díaz';
 
-function payload(id, { waiting = false } = {}) {
+function payload(id, { waiting = false, matchId = MATCH } = {}) {
   const now = Date.now();
   return {
-    matchId: MATCH,
+    matchId,
     matchDate: '2026-11-17',
     name: NAME,
     rosterId: ROSTER,
@@ -87,6 +90,10 @@ test('el enlace con token puede anotarse, esperar y anular', async (t) => {
       date: '2026-11-17', time: '17:00', venueName: 'Polideportivo Colegiales',
       capacity: 14, createdByUid: ORG, viewers: ['*'], adders: ['*'], playerCount: 0, playerVisible: true,
     }));
+    await assertSucceeds(setDoc(doc(adb, 'matches', MATCH2), {
+      date: '2026-11-17', time: '19:00', venueName: 'Polideportivo Colegiales',
+      capacity: 14, createdByUid: ORG, viewers: ['*'], adders: ['*'], playerCount: 0, playerVisible: true,
+    }));
     const org = testEnv.authenticatedContext(ORG, { email: 'gustavo@demo.local' });
     await assertSucceeds(setDoc(doc(org.firestore(), 'shareTokens', SHARE), {
       uid: ORG, name: 'Gustavo', createdAt: 1,
@@ -104,9 +111,20 @@ test('el enlace con token puede anotarse, esperar y anular', async (t) => {
       });
     }));
 
-    const playerId = 'm1abcxyzpending01';
+    // Este test hace más de 5 movimientos: sube el tope de la ventana.
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'settings', 'signup'), { maxMoves: 20, windowMinutes: 60 });
+    });
+    const playerId = selfId(MATCH);
+    // Un id que no es partido__ficha no entra, aunque el resto esté bien.
+    await charge('m1abcxyzpending01', 1);
+    await assertFails(setDoc(doc(anon, 'players', 'm1abcxyzpending01'), payload('m1abcxyzpending01')));
+    const paid = payload(playerId);
+    paid.paid = true;
+    await charge(playerId, 2);
+    await assertFails(setDoc(doc(anon, 'players', playerId), paid));
     const body = payload(playerId);
-    await charge(playerId, 1);
+    await charge(playerId, 3);
     await assertSucceeds(setDoc(doc(anon, 'players', playerId), body));
     await assertSucceeds(setDoc(doc(anon, 'log', 'logAltaPendiente01'), logEntry(
       { id: playerId, ...body },
@@ -123,27 +141,26 @@ test('el enlace con token puede anotarse, esperar y anular', async (t) => {
     assert.equal(saved.data().shareToken, SHARE);
     assert.equal(saved.data().addedByUid, ORG);
 
-    const paid = payload('m1abcxyzpaidblock1');
-    paid.paid = true;
-    await charge('m1abcxyzpaidblock1', 2);
-    await assertFails(setDoc(doc(anon, 'players', 'm1abcxyzpaidblock1'), paid));
+    // El mismo jugador otra vez en el mismo partido: mismo id, es un update y no pasa.
+    await charge(playerId, 4);
+    await assertFails(setDoc(doc(anon, 'players', playerId), payload(playerId, { waiting: true })));
 
-    const waitId = 'm1abcxyzwaitlist01';
-    const waiting = payload(waitId, { waiting: true });
-    await charge(waitId, 3);
+    const waitId = selfId(MATCH2);
+    const waiting = payload(waitId, { waiting: true, matchId: MATCH2 });
+    await charge(waitId, 5);
     await assertSucceeds(setDoc(doc(anon, 'players', waitId), waiting));
     await assertSucceeds(setDoc(doc(anon, 'log', 'logAltaEspera0001'), logEntry(
       { id: waitId, ...waiting },
       { type: 'se anotó', detail: 'En la lista de espera', shareToken: SHARE, actorName: 'Gustavo', actorUid: ORG },
     )));
 
-    await charge(playerId, 4);
+    await charge(playerId, 6);
     await assertSucceeds(deleteDoc(doc(anon, 'players', playerId)));
     await assertSucceeds(setDoc(doc(anon, 'log', 'logBajaPendiente01'), logEntry(
       { id: playerId, name: NAME },
       { type: 'se bajó', detail: 'Anuló su lugar', shareToken: '', actorName: NAME, actorUid: '' },
     )));
-    await charge(waitId, 5);
+    await charge(waitId, 7);
     await assertSucceeds(deleteDoc(doc(anon, 'players', waitId)));
     const gone = await getDoc(doc(adb, 'players', playerId));
     const waitGone = await getDoc(doc(adb, 'players', waitId));
@@ -218,21 +235,20 @@ test('el enlace queda a nombre de su organizador en un partido de todos creado p
       count += 1;
       tx.set(ref, { windowStart: prev ? prev.windowStart : serverTimestamp(), count, lastId: playerId });
     }));
-    const shared = 'm2sharedgustavo01';
+    // El token tiene que ser del organizador que figura.
+    const shared = selfId(MATCH);
+    await charge(shared);
+    await assertFails(setDoc(doc(anon, 'players', shared), {
+      ...payload(shared), addedByUid: MARTIN, addedBy: 'Martín', signedUpWith: MARTIN, signedUpWithName: 'Martín',
+    }));
+
     await charge(shared);
     await assertSucceeds(setDoc(doc(anon, 'players', shared), payload(shared)));
 
     // Partido solo de Martín: el enlace de Gustavo no puede ponerse como organizador.
-    const mine = 'm2onlymartin00001';
+    const mine = selfId(OWN);
     await charge(mine);
-    await assertFails(setDoc(doc(anon, 'players', mine), { ...payload(mine), matchId: OWN, matchDate: '2026-11-18', viewers: [MARTIN], adders: [MARTIN] }));
-
-    // El token tiene que ser del organizador que figura.
-    const forged = 'm2forgedmartin001';
-    await charge(forged);
-    await assertFails(setDoc(doc(anon, 'players', forged), {
-      ...payload(forged), addedByUid: MARTIN, addedBy: 'Martín', signedUpWith: MARTIN, signedUpWithName: 'Martín',
-    }));
+    await assertFails(setDoc(doc(anon, 'players', mine), { ...payload(mine, { matchId: OWN }), matchDate: '2026-11-18', viewers: [MARTIN], adders: [MARTIN] }));
   } finally {
     await testEnv.cleanup();
   }
