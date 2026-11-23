@@ -15,8 +15,6 @@ import {
   needsReminderBanner, playersForOrganizer, promotionMessage, reminderDueAt, reminderLinks, reminderProgress, unconfirmedForReminder,
   reservationClearedByAnswer,
 } from './reminders.js';
-import { isShortCode, shortConfirmUrl } from './short.js';
-import { shortenExternal } from './shorten.js';
 import { PRIVATE_WA_TEXT } from './privacy.js';
 import { activityNoticeText, activityNotices } from './notify.js';
 import { ROSTER_DENIED_WRITE, SUSPENDED_TEXT, activeSuspensions, blockingSuspensions, canonicalPhone, capitalizeWords, cleanShortName, displayName, foldText, fullNameBehind, givenName, nickOf, isRosterDenied, personKey, phoneIdentity, playerMatchesPerson, rosterByIdentity, rosterByPhone, rosterForOrganizer, rosterHeldBy, rosterIdForSuspension, searchRoster, suspensionHistoryOf, visibleRosterHits, visibleRosterPhone, withPendingRoster } from './roster.js';
@@ -49,7 +47,7 @@ import {
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v233';
+const APP_VERSION = 'f7c-v235';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -177,9 +175,7 @@ function slotSide(p, m, readOnly, payText) {
 function waButton(p, text) {
   const view = withAgendaPhone(p);
   if (view?.phone) {
-    const code = isShortCode(view?.shortCode) ? view.shortCode : '';
-    const shorten = code ? ` data-short-code="${esc(code)}" data-wa-phone="${esc(view.phone)}" data-wa-text="${esc(text || '').replace(/\n/g, '&#10;')}"` : '';
-    return `<a class="wa-btn" href="${esc(waHref(view.phone, text || ''))}"${shorten} target="_blank" rel="noopener" aria-label="WhatsApp a ${esc(view.name)}">${ICON.wa}</a>`;
+    return `<a class="wa-btn" href="${esc(waHref(view.phone, text || ''))}" target="_blank" rel="noopener" aria-label="WhatsApp a ${esc(view.name)}">${ICON.wa}</a>`;
   }
   if (phoneHidden(view)) return `<button type="button" class="wa-btn" disabled aria-label="${esc(PRIVATE_WA_TEXT)}">${ICON.wa}</button>`;
   return '';
@@ -2338,8 +2334,8 @@ function renderMatch(id) {
 }
 
 /* ───────── textos ───────── */
+// v235: siempre el link completo. Sin link corto ni acortador externo.
 function confirmUrlFor(m, p) {
-  if (isShortCode(p?.shortCode)) return shortConfirmUrl(p.shortCode);
   if (p?.confirmToken && p?.id) return confirmPageUrl({ matchId: m.id, playerId: p.id, token: p.confirmToken });
   return '';
 }
@@ -2532,13 +2528,10 @@ async function openReminders(m) {
   let showAll = false;
   openSheet(`<h3>Enviar recordatorios</h3><p class="hint">Armando los links…</p>`);
   const tokens = new Map();
-  const codes = new Map();
   try {
     for (const p of everyone) {
       if (!p.phone) continue;
       tokens.set(p.id, await app.store.ensureConfirmToken(p.id));
-      const code = await app.store.ensureShortLink(p.id);
-      if (code) codes.set(p.id, code);
     }
   } catch (e) {
     console.error(e);
@@ -2549,7 +2542,6 @@ async function openReminders(m) {
   const fresh = everyone.map((p) => ({
     ...p,
     confirmToken: tokens.get(p.id) || p.confirmToken,
-    shortCode: codes.get(p.id) || p.shortCode,
   }));
   const rosterNow = new Map(app.players.map((player) => [player.id, player]));
   for (const player of fresh) rosterNow.set(player.id, { ...rosterNow.get(player.id), ...player });
@@ -2557,22 +2549,7 @@ async function openReminders(m) {
     match: m, players: fresh, venue: placeOf(m), roster: app.roster,
     allPlayers: [...rosterNow.values()], matches: app.matches,
   }).map((row) => [row.id, row]));
-  const externalById = new Map();
-  const hrefFor = (link) => {
-    const external = link ? externalById.get(link.id) : '';
-    if (!link || !external) return link?.waUrl || '';
-    return waSendUrl({ phone: link.phone, text: link.text.split(link.confirmUrl).join(external) });
-  };
-  for (const p of fresh) {
-    if (!isShortCode(p.shortCode)) continue;
-    void resolveExternalShort(p.shortCode).then((url) => {
-      if (!url) return;
-      externalById.set(p.id, url);
-      const link = linkById.get(p.id);
-      const a = document.querySelector(`#remind-list a[data-send="${CSS.escape(p.id)}"]`);
-      if (a && link) a.href = hrefFor(link);
-    });
-  }
+  const hrefFor = (link) => link?.waUrl || '';
   const paint = () => {
     const visible = showAll ? fresh : playersForOrganizer(fresh, app.who);
     const prog = reminderProgress(visible);
@@ -2744,11 +2721,7 @@ async function offerPromotionWhatsApp(player, match) {
   const token = await app.store.ensureConfirmToken(player.id);
   if (!(await askYesNo(`¿Avisarle por WhatsApp a ${player.name} que subió al partido?`))) return;
   const pending = window.open('about:blank', '_blank');
-  const code = await app.store.ensureShortLink(player.id);
-  const external = isShortCode(code) ? await resolveExternalShort(code) : '';
-  const confirmUrl = external || (isShortCode(code)
-    ? shortConfirmUrl(code)
-    : confirmPageUrl({ matchId: match.id, playerId: player.id, token }));
+  const confirmUrl = confirmPageUrl({ matchId: match.id, playerId: player.id, token });
   const text = promotionMessage({ player, match, venue: placeOf(match), confirmUrl });
   placeWa(pending, waSendUrl({ phone, text }));
 }
@@ -2777,18 +2750,6 @@ function shareRosterId(player) {
 function playerShareButton(id) {
   return `<button type="button" class="icon-btn player-share" id="${id}" aria-label="Copiar enlace">${ICON.shareNodes}</button>`;
 }
-const playerShortJobs = new Map();
-function resolvePlayerShort(longUrl) {
-  const pending = playerShortJobs.get(longUrl);
-  if (pending) return pending;
-  const job = (async () => {
-    const got = await shortenExternal(longUrl);
-    return got?.shortUrl || '';
-  })();
-  playerShortJobs.set(longUrl, job);
-  job.then((url) => { if (!url) playerShortJobs.delete(longUrl); }, () => playerShortJobs.delete(longUrl));
-  return job;
-}
 async function copyPlayerLink(rosterId) {
   let token = '';
   try { token = await app.store?.ensureShareToken?.(actor().uid, actor().name) || ''; } catch { token = ''; }
@@ -2797,10 +2758,8 @@ async function copyPlayerLink(rosterId) {
     openSheet(`<h3>Enlace</h3><p>Este jugador todavía no está en Jugadores.</p><div class="sheet-actions"><button type="button" class="btn" data-close>Cerrar</button></div>`);
     return;
   }
-  const short = await resolvePlayerShort(url);
-  const shareUrl = short || url;
-  if (await copyText(shareUrl)) { toast('Enlace copiado'); return; }
-  openSheet(`<h3>Enlace</h3><p class="hint">No se pudo copiar. Seleccioná el enlace.</p><label class="field"><input id="player-link" readonly value="${esc(shareUrl)}"></label><div class="sheet-actions"><button type="button" class="btn" data-close>Cerrar</button></div>`);
+  if (await copyText(url)) { toast('Enlace copiado'); return; }
+  openSheet(`<h3>Enlace</h3><p class="hint">No se pudo copiar. Seleccioná el enlace.</p><label class="field"><input id="player-link" readonly value="${esc(url)}"></label><div class="sheet-actions"><button type="button" class="btn" data-close>Cerrar</button></div>`);
   const input = $('#player-link');
   if (input) input.focus();
 }
@@ -2954,48 +2913,12 @@ function openWa({ phone = '', text = '' } = {}) {
   window.open(waSendUrl({ phone, text }), '_blank', 'noopener');
 }
 
-const externalShortJobs = new Map();
-function resolveExternalShort(code) {
-  if (!isShortCode(code)) return Promise.resolve('');
-  const pending = externalShortJobs.get(code);
-  if (pending) return pending;
-  const job = (async () => {
-    const cached = await app.store.readExternalShort(code);
-    if (cached?.shortUrl) return cached.shortUrl;
-    const got = await shortenExternal(shortConfirmUrl(code));
-    if (!got?.shortUrl) return '';
-    await app.store.saveExternalShort(code, got);
-    return got.shortUrl;
-  })();
-  externalShortJobs.set(code, job);
-  job.then((url) => { if (!url) externalShortJobs.delete(code); }, () => externalShortJobs.delete(code));
-  return job;
-}
-
 function placeWa(win, url) {
   if (win && !win.closed) {
     win.location.replace(url);
     return;
   }
   window.location.href = url;
-}
-
-function bindExternalShortClicks() {
-  document.addEventListener('click', (e) => {
-    const a = e.target.closest('a.wa-btn[data-short-code]');
-    if (!a) return;
-    const code = a.dataset.shortCode || '';
-    if (!isShortCode(code)) return;
-    e.preventDefault();
-    const pending = window.open('about:blank', '_blank');
-    const phone = a.dataset.waPhone || '';
-    const text = a.dataset.waText || '';
-    const house = shortConfirmUrl(code);
-    void resolveExternalShort(code).then((external) => {
-      const next = external ? text.split(house).join(external) : text;
-      placeWa(pending, waSendUrl({ phone, text: next }));
-    });
-  });
 }
 
 /* Ajustes */
@@ -8774,7 +8697,6 @@ async function boot() {
   $('#btn-text-bigger').onclick = () => { stepTextSize(1); syncTextSize(); };
   syncTextSize();
   $('#btn-settings').onclick = () => { if (app.session?.user) openSettings(); };
-  bindExternalShortClicks();
   $('#brand').onclick = () => { if (!app.session?.user) return; location.hash = '#/'; };
 
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {

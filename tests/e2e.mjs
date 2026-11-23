@@ -90,8 +90,6 @@ await ctx.route(/firestore\.googleapis\.com|firebaseio\.com|identitytoolkit\.goo
   console.error('BLOCKED', route.request().url());
   return route.abort();
 });
-await ctx.route(/https:\/\/spoo\.me\//, (route) => route.abort());
-await ctx.route(/https:\/\/da\.gd\//, (route) => route.abort());
 const page = await ctx.newPage();
 await page.clock.install({ time: NOW });
 const reloadPage = page.reload.bind(page);
@@ -105,7 +103,7 @@ page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
 page.on('console', (m) => {
   if (m.type() !== 'error') return;
   const text = m.text();
-  // Los mocks de spoo.me y da.gd abortan o contestan 503. Chrome lo anota en la consola.
+  // Los mocks que abortan o contestan 503 quedan en la consola de Chrome.
   if (/^Failed to load resource: (net::ERR_(FAILED|ABORTED)|the server responded with a status of 503 )/.test(text)) return;
   errors.push('console: ' + text);
 });
@@ -149,7 +147,7 @@ const settingsText = await page.locator('#sheet').innerText();
 check('Ajustes no ofrece Business ni Dual Messenger', !/Desde qué WhatsApp|Dual Messenger|WhatsApp Business|Que el celular pregunte/.test(settingsText), settingsText.replace(/\s+/g, ' ').slice(0, 180));
 check('El admin ve hacer backup', await page.isVisible('#set-backup') && await page.isVisible('#set-restore') && await page.isVisible('#set-reset-db'));
 check('El admin ve el medidor de Firebase', (await page.locator('#usage-line').innerText()).includes('Hoy (se renueva a las 05:00)') && (await page.locator('#usage-line').innerText()).includes('lecturas de 50.000') && (await page.locator('#usage-meter').innerText()).includes('Estimación'));
-check('Ajustes muestra la versión que corre', (await page.locator('#app-version').innerText()) === 'Versión f7c-v233');
+check('Ajustes muestra la versión que corre', (await page.locator('#app-version').innerText()) === 'Versión f7c-v235');
 check('En la raíz no aparece el cartel de prueba', (await page.locator('html').getAttribute('class') || '').includes('trial') === false && await page.locator('#trial-banner').isHidden());
 check('Ajustes no repite el nombre de la app al pie', !(await page.locator('#sheet').innerText()).includes('Mis Partidos ·'));
 check('Borra la elección vieja de WhatsApp', await page.evaluate(() => localStorage.getItem('f7c-wa-from') == null));
@@ -503,26 +501,27 @@ check('Contador 3/14', (await page.textContent('#slot-count')) === '3/14');
 check('Siguen 14 lugares (3 ocupados + 11 libres)', (await page.$$('#slots > li')).length === 14 && (await page.$$('.slot.free')).length === 11);
 const hrefs = await page.$$eval('.wa-btn', (els) => els.map((e) => e.getAttribute('href')));
 const juanHrefText = decodeURIComponent(new URL(hrefs[0]).searchParams.get('text') || '');
-const juanShort = juanHrefText.match(/\/c\/\?k=([0-9A-Za-z]{8})/)?.[1] || '';
-const juanLink = await page.evaluate((code) => {
+const juanLink = await page.evaluate(() => {
   const db = JSON.parse(localStorage.getItem('f7c-demo-db'));
   const found = Object.entries(db.players).find(([, p]) => p.name === 'Juan Pérez');
-  return { id: found[0], player: found[1], link: db.links?.[code] || null };
-}, juanShort);
+  return { id: found[0], player: found[1], links: Object.keys(db.links || {}).length };
+});
 const juanLinkUrl = juanHrefText.split('Respondé en este link: ')[1] || '';
-check('Link wa.me Juan correcto',
+const juanFullUrl = (() => { try { return new URL(juanLinkUrl); } catch { return null; } })();
+// v235: sin acortador. El mensaje lleva el link completo de confirmar.html.
+check('Link wa.me Juan correcto, con el link completo',
   hrefs[0].startsWith('https://wa.me/5491112345678?text=')
   && juanHrefText === `¡Hola Juan! ¿Confirmás que jugás jueves 22/10 21:00?\n\nRespondé en este link: ${juanLinkUrl}`
-  && juanLinkUrl.includes(`/c/?k=${juanShort}`)
+  && juanFullUrl?.pathname.endsWith('/confirmar.html')
+  && juanFullUrl.searchParams.get('m') === juanLink.player.matchId
+  && juanFullUrl.searchParams.get('p') === juanLink.id
+  && juanFullUrl.searchParams.get('t') === juanLink.player.confirmToken
+  && !juanLinkUrl.includes('/c/?k=')
   && juanHrefText.includes('hs') === false
   && juanHrefText.includes('Pérez') === false
   && juanHrefText.includes('Ufm0uQ4') === false
-  && juanShort.length === 8
-  && juanLink.player.shortCode === juanShort
-  && juanLink.link?.m === juanLink.player.matchId
-  && juanLink.link?.p === juanLink.id
-  && juanLink.link?.t === juanLink.player.confirmToken
-  && juanHrefText.includes(juanLink.player.confirmToken) === false,
+  && !juanLink.player.shortCode
+  && juanLink.links === 0,
   juanHrefText.slice(0, 220));
 players.forEach(([n, , wa], i) => check(`Número normalizado ${n} → ${wa}`, hrefs[i]?.startsWith(`https://wa.me/${wa}?text=`)));
 check('Cada jugador muestra "Agregó: Gustavo"', (await page.$$('.tag.g')).length === 3);
@@ -549,9 +548,10 @@ const remindHref = await remindLink.getAttribute('href');
 const remindText = decodeURIComponent(remindHref.split('text=')[1]);
 check('Recordatorio abre wa.me de Juan', remindHref.startsWith('https://wa.me/5491112345678?text='), remindHref.slice(0, 80));
 const remindUrl = remindText.split('Respondé en este link: ')[1] || '';
-check('El mensaje saluda con el nombre de pila, el día y el link corto',
+check('El mensaje saluda con el nombre de pila, el día y el link completo',
   remindText === `¡Hola Juan! ¿Confirmás que jugás jueves 22/10 21:00?\n\nRespondé en este link: ${remindUrl}`
-  && remindUrl.includes(`/c/?k=${juanShort}`)
+  && remindUrl === juanLinkUrl
+  && !remindUrl.includes('/c/?k=')
   && remindText.includes('hs') === false
   && remindText.includes('Pérez') === false
   && remindText.includes('Ufm0uQ4') === false);
@@ -564,7 +564,7 @@ const juan = await page.evaluate(() => {
   const found = Object.entries(db.players).find(([, p]) => p.name === 'Juan Pérez');
   return { id: found[0], ...found[1] };
 });
-check('Token del link guardado en el jugador', juan.confirmToken && juan.confirmToken.length >= 16 && juan.reminderSentAt > 0 && remindText.includes(`/c/?k=${juan.shortCode}`) && remindText.includes(juan.confirmToken) === false);
+check('Token del link guardado en el jugador', juan.confirmToken && juan.confirmToken.length >= 16 && juan.reminderSentAt > 0 && remindText.includes(`t=${juan.confirmToken}`) && !remindText.includes('/c/?k='));
 const publicCard = await page.evaluate((token) => JSON.parse(localStorage.getItem('f7c-demo-db')).confirmations[token], juan.confirmToken);
 check('La ficha pública no tiene teléfono', publicCard && publicCard.name === 'Juan Pérez' && publicCard.phone == null && !JSON.stringify(publicCard).includes('549'));
 await page.click('dialog.sheet [data-close]');
@@ -575,10 +575,17 @@ await bad.waitForSelector('text=El link ya venció');
 check('Token incorrecto no confirma', (await page.evaluate((id) => JSON.parse(localStorage.getItem('f7c-demo-db')).players[id].confirmed, juan.id)) == null);
 await bad.close();
 
+// Un link corto que ya se mandó antes de v235 sigue abriendo la confirmación.
+const oldShort = 'Viejo234';
+await page.evaluate(({ code, id, m, t }) => {
+  const db = JSON.parse(localStorage.getItem('f7c-demo-db'));
+  db.links = { ...(db.links || {}), [code]: { m, p: id, t } };
+  localStorage.setItem('f7c-demo-db', JSON.stringify(db));
+}, { code: oldShort, id: juan.id, m: juan.matchId, t: juan.confirmToken });
 const shortPage = await ctx.newPage();
-await shortPage.goto(`${BASE}c/?k=${encodeURIComponent(juan.shortCode)}`);
+await shortPage.goto(`${BASE}c/?k=${encodeURIComponent(oldShort)}`);
 await shortPage.waitForSelector('#btn-si');
-check('El link corto abre la misma confirmación', (await shortPage.locator('h1').innerText()) === 'Juan' && !(await shortPage.locator('body').innerText()).includes('Pérez') && shortPage.url().includes('confirmar.html') && shortPage.url().includes(`t=${encodeURIComponent(juan.confirmToken)}`));
+check('Un link corto viejo abre la misma confirmación', (await shortPage.locator('h1').innerText()) === 'Juan' && !(await shortPage.locator('body').innerText()).includes('Pérez') && shortPage.url().includes('confirmar.html') && shortPage.url().includes(`t=${encodeURIComponent(juan.confirmToken)}`));
 const badShort = await ctx.newPage();
 await badShort.goto(`${BASE}c/?k=zzzzzzzz`);
 await badShort.waitForSelector('text=El link ya venció');
@@ -1141,9 +1148,9 @@ check('El mensaje usa el nombre, el día, la hora y el link',
   && teoText.includes('Polideportivo Colegiales')
   && teoText.includes('lunes 26/10')
   && teoText.includes('21:00')
-  && teoText.includes('/c/?k=')
-  && teoText.includes(luisStored.token) === false
-  && /\/c\/\?k=[0-9A-Za-z]{8}/.test(teoText), teoText.slice(0, 180));
+  && teoText.includes('confirmar.html?m=')
+  && teoText.includes('/c/?k=') === false
+  && teoText.includes(luisStored.token) === false, teoText.slice(0, 180));
 await teoPopup.close();
 await page.click('#btn-add-wait');
 await page.fill('#player-form [name=name]', 'Sin Fono');
@@ -2539,135 +2546,55 @@ const keeperSides = await page.evaluate((ids) => {
 check('Los dos que solo son Arquero quedan en equipos distintos', keeperSides.uno !== 'out' && keeperSides.dos !== 'out' && keeperSides.uno !== keeperSides.dos && keeperSides.bib.length === 3 && keeperSides.plain.length === 3, JSON.stringify(keeperSides));
 await page.locator('.team-columns').screenshot({ path: '/opt/cursor/artifacts/screenshots/v101-equipos-posiciones.png' });
 
-async function routeShorten(spoo, dagd) {
-  await page.route(/https:\/\/spoo\.me\//, spoo);
-  await page.route(/https:\/\/da\.gd\//, dagd);
-  return async () => {
-    await page.unroute(/https:\/\/spoo\.me\//, spoo);
-    await page.unroute(/https:\/\/da\.gd\//, dagd);
-  };
-}
+// v235 (punto 7): el acortador se retiró. Ningún envío llama a spoo.me ni a da.gd,
+// y los mensajes llevan el link completo de confirmar.html.
+let shortenerHits = 0;
+const countShortener = (route) => { shortenerHits += 1; return route.abort(); };
+await page.route(/https:\/\/(spoo\.me|da\.gd)\//, countShortener);
 const shortMatchId = await page.evaluate(async () => {
   const who = window.__app.who;
-  const id = await window.__app.store.addMatch({ date: '2026-10-23', time: '18:00', note: 'Acortar', capacity: 14 }, who);
+  const id = await window.__app.store.addMatch({ date: '2026-10-23', time: '18:00', note: 'Sin acortar', capacity: 14 }, who);
   const match = window.__app.matches.find((m) => m.id === id);
   await window.__app.store.addPlayer(match, { name: 'Corto Uno', phone: '5491199990001' }, who);
   return id;
 });
-let earlyShort = 0;
-const countAbort = (route) => { earlyShort += 1; return route.abort(); };
-await page.route(/https:\/\/spoo\.me\//, countAbort);
-await page.route(/https:\/\/da\.gd\//, countAbort);
 await page.evaluate((id) => { location.hash = `#/partido/${id}`; }, shortMatchId);
-await page.waitForSelector('#slots .wa-btn[data-short-code]');
-await page.waitForTimeout(250);
-check('Abrir el partido no llama al acortador', earlyShort === 0, String(earlyShort));
-await page.unroute(/https:\/\/spoo\.me\//, countAbort);
-await page.unroute(/https:\/\/da\.gd\//, countAbort);
-
-let spooHits = 0;
-let spooBody = null;
-let off = await routeShorten(async (route) => {
-  spooHits += 1;
-  spooBody = route.request().postDataJSON();
-  await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ short_url: 'https://spoo.me/ZXwB0uF' }) });
-}, (route) => route.fulfill({ status: 500, body: 'no' }));
-await page.click('#btn-remind');
-await page.waitForFunction(() => {
-  const row = [...document.querySelectorAll('#remind-list .remind-row')].find((el) => el.innerText.includes('Corto Uno'));
-  const href = row?.querySelector('a')?.getAttribute('href') || '';
-  return decodeURIComponent(href).includes('https://spoo.me/ZXwB0uF');
-});
-check('spoo.me recibe solo long_url', spooBody && spooBody.long_url.includes('/c/?k=') && !Object.hasOwn(spooBody, 'block_bots') && Object.keys(spooBody).join(',') === 'long_url', JSON.stringify(spooBody));
-const cachedShort = await page.evaluate(() => {
+await page.waitForSelector('#slots .slot:has-text("Corto Uno") .wa-btn');
+check('El botón de WhatsApp ya no espera un link corto', (await page.$$('#slots .wa-btn[data-short-code]')).length === 0);
+const cortoUno = await page.evaluate(() => {
   const db = JSON.parse(localStorage.getItem('f7c-demo-db'));
-  return Object.values(db.links).find((row) => row.shortUrl === 'https://spoo.me/ZXwB0uF') || null;
+  const found = Object.entries(db.players).find(([, p]) => p.name === 'Corto Uno');
+  return { id: found[0], ...found[1] };
 });
-check('El link guarda shortUrl, shortProvider y shortAt', cachedShort?.shortProvider === 'spoo' && typeof cachedShort?.shortAt === 'number' && !!cachedShort.m && !!cachedShort.t, JSON.stringify(cachedShort));
-await page.click('dialog.sheet [data-close]');
+const fullLinkOk = (text) => text.includes(`confirmar.html?m=${encodeURIComponent(cortoUno.matchId)}&p=${encodeURIComponent(cortoUno.id)}&t=${encodeURIComponent(cortoUno.confirmToken)}`)
+  && !text.includes('/c/?k=') && !text.includes('spoo.me') && !text.includes('da.gd');
 await page.click('#btn-remind');
-await page.waitForFunction(() => decodeURIComponent([...document.querySelectorAll('#remind-list a')].find((a) => a.closest('.remind-row')?.innerText.includes('Corto Uno'))?.getAttribute('href') || '').includes('https://spoo.me/ZXwB0uF'));
-check('El segundo envío no vuelve a llamar a spoo.me', spooHits === 1, String(spooHits));
+await page.waitForSelector('#remind-list .remind-row:has-text("Corto Uno") a');
+const cortoRemind = decodeURIComponent(await page.locator('#remind-list .remind-row', { hasText: 'Corto Uno' }).locator('a').getAttribute('href'));
+check('El recordatorio lleva el link completo', fullLinkOk(cortoRemind), cortoRemind.slice(0, 220));
 const [shortPop] = await Promise.all([
   page.waitForEvent('popup'),
   page.locator('#remind-list .remind-row', { hasText: 'Corto Uno' }).locator('a').click(),
 ]);
-await shortPop.waitForURL((url) => /wa\.me|spoo\.me|phone=/.test(String(url)), { waitUntil: 'commit' });
-check('Enviar abre WhatsApp con el link de spoo.me', /wa\.me|phone=/.test(shortPop.url()) && decodeURIComponent(shortPop.url()).includes('https://spoo.me/ZXwB0uF'));
+await shortPop.waitForURL((url) => /wa\.me|phone=/.test(String(url)), { waitUntil: 'commit' });
+check('Enviar abre WhatsApp con el link completo', fullLinkOk(decodeURIComponent(shortPop.url()).replace(/\+/g, ' ')));
 await shortPop.close();
 await page.click('dialog.sheet [data-close]');
-await off();
-
 const [waPop] = await Promise.all([
   page.waitForEvent('popup'),
   page.locator('#slots .slot', { hasText: 'Corto Uno' }).locator('.wa-btn').click(),
 ]);
-await waPop.waitForURL((url) => /wa\.me|spoo\.me|phone=/.test(String(url)), { waitUntil: 'commit' });
+await waPop.waitForURL((url) => /wa\.me|phone=/.test(String(url)), { waitUntil: 'commit' });
 const waOpened = decodeURIComponent(waPop.url()).replace(/\+/g, ' ');
-check('El botón de WhatsApp abre WhatsApp con spoo.me', /wa\.me|phone=/.test(waPop.url()) && waOpened.includes('https://spoo.me/ZXwB0uF') && waOpened.includes('¿Confirmás que jugás'), waOpened.slice(0, 220));
+check('El botón de WhatsApp abre WhatsApp con el link completo', fullLinkOk(waOpened) && waOpened.includes('¿Confirmás que jugás'), waOpened.slice(0, 220));
 await waPop.close();
-
-await page.evaluate(async () => {
-  const match = window.__app.matches.find((m) => m.note === 'Acortar');
-  await window.__app.store.addPlayer(match, { name: 'Corto Dos', phone: '5491199990002' }, window.__app.who);
-  await window.__app.store.addPlayer(match, { name: 'Corto Tres', phone: '5491199990003' }, window.__app.who);
-  await window.__app.store.addPlayer(match, { name: 'Corto Cuatro', phone: '5491199990004' }, window.__app.who);
-});
-await page.waitForSelector('#slots .name:text-is("Corto Cuatro")');
-
-let garbageCalls = 0;
-off = await routeShorten(async (route) => {
-  garbageCalls += 1;
-  await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ short_url: 'https://evil.example/phish' }) });
-}, async (route) => {
-  garbageCalls += 1;
-  await route.fulfill({ status: 200, contentType: 'text/plain', body: 'hola no es un link' });
-});
-await page.click('#btn-remind');
-await page.waitForSelector('#remind-list .remind-row:has-text("Corto Dos") a');
-for (let i = 0; i < 30 && garbageCalls < 2; i++) await page.waitForTimeout(50);
-check('La basura consulta los dos servicios', garbageCalls >= 2, String(garbageCalls));
-const garbageHref = decodeURIComponent(await page.locator('#remind-list .remind-row', { hasText: 'Corto Dos' }).locator('a').getAttribute('href'));
-check('Una respuesta basura deja el link propio', /\/c\/\?k=[0-9A-Za-z]{8}/.test(garbageHref) && !garbageHref.includes('evil.example') && !garbageHref.includes('spoo.me'));
-const garbageStored = await page.evaluate(() => {
+check('Nadie llama al acortador', shortenerHits === 0, String(shortenerHits));
+check('No se crean links cortos nuevos', await page.evaluate(() => {
   const db = JSON.parse(localStorage.getItem('f7c-demo-db'));
-  const player = Object.values(db.players).find((p) => p.name === 'Corto Dos');
-  return db.links[player.shortCode];
-});
-check('La basura no se guarda en el link', garbageStored && !garbageStored.shortUrl, JSON.stringify(garbageStored));
-await page.click('dialog.sheet [data-close]');
-await off();
-
-off = await routeShorten(
-  (route) => route.fulfill({ status: 503, contentType: 'text/plain', body: 'down' }),
-  (route) => route.abort(),
-);
-await page.click('#btn-remind');
-await page.waitForSelector('#remind-list .remind-row:has-text("Corto Tres") a');
-await page.waitForTimeout(300);
-const failHref = decodeURIComponent(await page.locator('#remind-list .remind-row', { hasText: 'Corto Tres' }).locator('a').getAttribute('href'));
-check('Si los dos servicios fallan queda el link propio', /\/c\/\?k=[0-9A-Za-z]{8}/.test(failHref) && !failHref.includes('spoo.me') && !failHref.includes('da.gd'));
-await page.click('dialog.sheet [data-close]');
-await off();
-
-off = await routeShorten(async (route) => {
-  await new Promise((resolve) => setTimeout(resolve, 4000));
-  try { await route.abort(); } catch { /* el fetch ya se abortó a los 3 s */ }
-}, (route) => route.fulfill({ status: 200, contentType: 'text/plain', body: 'https://da.gd/jjXrP' }));
-await page.click('#btn-remind');
-await page.waitForFunction(() => {
-  const row = [...document.querySelectorAll('#remind-list .remind-row')].find((el) => el.innerText.includes('Corto Cuatro'));
-  return decodeURIComponent(row?.querySelector('a')?.getAttribute('href') || '').includes('https://da.gd/jjXrP');
-});
-check('Si spoo.me no contesta se usa da.gd', true);
-const dagdStored = await page.evaluate(() => {
-  const db = JSON.parse(localStorage.getItem('f7c-demo-db'));
-  const player = Object.values(db.players).find((p) => p.name === 'Corto Cuatro');
-  return db.links[player.shortCode];
-});
-check('da.gd queda guardado como dagd', dagdStored?.shortProvider === 'dagd' && dagdStored?.shortUrl === 'https://da.gd/jjXrP');
-await page.click('dialog.sheet [data-close]');
-await off();
+  const player = Object.values(db.players).find((p) => p.name === 'Corto Uno');
+  return !player.shortCode && !Object.values(db.links || {}).some((row) => row.shortUrl);
+}));
+await page.unroute(/https:\/\/(spoo\.me|da\.gd)\//, countShortener);
 await page.evaluate(() => { location.hash = '#/'; });
 await page.waitForSelector('.match-card:has-text("Hoy temprano")');
 
@@ -6455,25 +6382,17 @@ await page.locator('#slots .slot').first().screenshot({ path: '/opt/cursor/artif
     window.__copied = '';
     navigator.clipboard.writeText = (text) => { window.__copied = text; return Promise.resolve(); };
   });
-  let playerSpoo = 0;
-  const stopPlayerShort = await routeShorten(async (route) => {
-    playerSpoo += 1;
-    const body = route.request().postDataJSON();
-    if (!String(body?.long_url || '').includes('#/jugador/')) { await route.abort(); return; }
-    await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ short_url: 'https://spoo.me/Player1' }) });
-  }, (route) => route.abort());
+  let playerShortener = 0;
+  const countPlayerShortener = (route) => { playerShortener += 1; return route.abort(); };
+  await page.route(/https:\/\/(spoo\.me|da\.gd)\//, countPlayerShortener);
   await page.click('.slot:has-text("Enlace Díaz") .more-btn');
   await page.waitForSelector('#pm-share');
   await page.evaluate(() => { window.__copied = ''; });
   await page.click('#pm-share');
-  await page.waitForFunction(() => window.__copied === 'https://spoo.me/Player1');
-  check('El ícono al lado del nombre copia el link de spoo.me', playerSpoo === 1, `llamadas=${playerSpoo}`);
-  await page.evaluate(() => { window.__copied = ''; });
-  await page.click('#pm-share');
-  await page.waitForFunction(() => window.__copied === 'https://spoo.me/Player1');
-  check('Compartir otra vez no vuelve a llamar a spoo.me', playerSpoo === 1, String(playerSpoo));
+  await page.waitForFunction(() => window.__copied !== '');
+  check('El ícono al lado del nombre copia el link completo', (await page.evaluate(() => window.__copied)) === link && playerShortener === 0, `llamadas=${playerShortener}`);
   await page.click('#sheet [data-close]');
-  await stopPlayerShort();
+  await page.unroute(/https:\/\/(spoo\.me|da\.gd)\//, countPlayerShortener);
   await page.click('#btn-settings');
   await page.click('#set-logout');
   await page.waitForSelector('#login-form');
@@ -8568,7 +8487,8 @@ await fresh.close();
     const row = document.querySelector(`#self-list .self-row[data-match="${id}"]`);
     return row && row.innerText.includes('Confirmado') && row.querySelector('.self-check') && row.innerText.includes('21:00');
   }, self.open);
-  check('El jugador ve el tilde verde de confirmado', (await page.locator(`#self-list .self-row[data-match="${self.open}"] .self-status`).innerText()) === 'Confirmado');
+  // v235: dice quién lo confirmó (Martín tocó Confirmar lugar).
+  check('El jugador ve el tilde verde de confirmado y quién lo confirmó', (await page.locator(`#self-list .self-row[data-match="${self.open}"] .self-status`).innerText()) === 'Confirmado (por Martín)');
   await page.waitForSelector('.confirm-notice');
   const confirmedBanner = (await page.locator('.confirm-notice').innerText()).replace(/\s+/g, ' ');
   check('La primera vez avisa que lo confirmaron', confirmedBanner.includes('Te confirmaron') && confirmedBanner.includes('21:00') && confirmedBanner.includes('Polideportivo') && await page.locator('#player-push').count() === 0, confirmedBanner);

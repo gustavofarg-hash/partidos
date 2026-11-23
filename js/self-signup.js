@@ -3,7 +3,7 @@
 // La espera entra directo. Sacarse de un pendiente o de la espera no resta puntos.
 import { toEpoch } from './dates.js';
 import { personKey, rosterHolderIds } from './roster.js';
-import { pendingConfirmLabel } from './share.js';
+import { organizerFirstName, pendingConfirmLabel } from './share.js';
 
 export const DROP_LOCK_MS = 4 * 60 * 60 * 1000;
 export const RATE_WINDOW_MS = 30 * 60 * 1000;
@@ -68,6 +68,20 @@ export function signupRateDecision(prev, now = Date.now(), max = RATE_MAX, windo
 }
 
 /**
+ * v235: «Confirmado (por Gustavo)». En el Autoservicio, el organizador que
+ * aceptó la anotación. Si lo anotó un organizador, ese organizador.
+ * Una anotación del Autoservicio aceptada antes de v235 no guarda quién la
+ * aceptó: queda «Confirmado» solo, sin adivinar.
+ */
+export function confirmedLabel(player) {
+  let name = '';
+  if (player?.selfSignup === true) name = String(player?.acceptedBy || '');
+  else if (player?.guestAuto !== true) name = String(player?.signedUpWithName || player?.addedBy || '');
+  const first = organizerFirstName(name);
+  return first ? `Confirmado (por ${first})` : 'Confirmado';
+}
+
+/**
  * Qué muestra la fila. join = Anotarme, wait = Lista de espera,
  * cancel = Anular, locked = ya no se puede bajar solo.
  */
@@ -76,8 +90,9 @@ export function selfRowAction({ player, full, kickoff, now = Date.now(), organiz
   if (player?.waiting === true) return { action: 'cancel', status: 'wait', note: 'En lista de espera' };
   if (occupiesSpot(player)) {
     const left = Number(kickoff) - Number(now);
-    if (left > DROP_LOCK_MS) return { action: 'cancel', status: 'confirmed', note: 'Confirmado' };
-    return { action: 'locked', status: 'confirmed', note: 'Confirmado', lock: 'Avisale al organizador para bajarte' };
+    const note = confirmedLabel(player);
+    if (left > DROP_LOCK_MS) return { action: 'cancel', status: 'confirmed', note };
+    return { action: 'locked', status: 'confirmed', note, lock: 'Avisale al organizador para bajarte' };
   }
   if (full) return { action: 'wait', note: '' };
   return { action: 'join', note: '' };

@@ -196,7 +196,8 @@ Estados: ✅ está · ⚠️ parcial · ❌ falta o se perdió · ↩️ reempla
 | 19/10 (#10) | La selección del perfil persiste y los de la espera no figuran como «sin respuesta» | ✅ | PR #10, e2e OK |
 | 20/10 (#12) | Hoy queda todo el día en el inicio | ✅ | `matchCard`: `rel==='Hoy'` |
 | 20/10 (#14) | Cancelar partido (con jugadores) y notas | ✅ | «Cancelar partido» y «Reactivar partido» |
-| 20/10 (#16, #22) | Link corto de confirmación `/c/?k=`, acortado con spoo.me o da.gd | ✅ | `js/short.js`, `js/shorten.js`, `js/short-go.js`, `c/index.html` |
+| 20/10 (#16, #22) | Link corto de confirmación `/c/?k=`, acortado con spoo.me o da.gd. Retirado en f7c-v235: los mensajes usan el link completo; `/c/?k=` sigue abriendo los links ya mandados | ✅ | `js/short.js`, `js/short-go.js`, `c/index.html` |
+| 23/11 (v235) | Autoservicio: «Confirmado (por Gustavo)», con el organizador que confirmó, todo en verde | ✅ | `confirmedLabel` en `js/self-signup.js`; `acceptedBy` se guarda al tocar «Confirmar lugar» (`confirmSelf`). Aceptados antes de v235: «Confirmado» solo |
 | 20/10 (#17) | Tres pestañas fijas; Próximos 7 días y «Ver más adelante» | ✅ | «Ver más adelante» en `app.js`. **v68:** cuarta pestaña «Estadísticas». **v70, a pedido:** quinta pestaña «Registro», a la derecha. Siguen fijas y entran a 390px |
 | 20/10 (#20) | La pantalla no se refresca sola; «Cancelar» solo en partidos no pasados | ✅ | `app.js:3725`: no re-renderiza con una hoja abierta |
 | 20/10 (#21) | Sede del partido y jugadores por equipo (5–11) | ✅ | «Jugadores por equipo», `js/venues.js` |
