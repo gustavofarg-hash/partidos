@@ -175,3 +175,65 @@ test('el enlace con token puede anotarse, esperar y anular', async (t) => {
     await testEnv.cleanup();
   }
 });
+
+// Autoservicio con el enlace de un organizador en un partido abierto a todos
+// (adders ['*']) que creó otro organizador: queda a nombre del dueño del enlace.
+test('el enlace queda a nombre de su organizador en un partido de todos creado por otro', async (t) => {
+  if (!process.env.FIRESTORE_EMULATOR_HOST) {
+    t.skip('sin emulador de Firestore');
+    return;
+  }
+  const { initializeTestEnvironment, assertSucceeds, assertFails } = await import('@firebase/rules-unit-testing');
+  const { doc, setDoc, serverTimestamp, runTransaction } = await import('firebase/firestore');
+  const [hostname, portRaw] = process.env.FIRESTORE_EMULATOR_HOST.split(':');
+  const testEnv = await initializeTestEnvironment({
+    projectId: 'demo-guest-signup-shared',
+    firestore: { rules: readFileSync(new URL('../firestore.rules', import.meta.url), 'utf8'), host: hostname, port: Number(portRaw) },
+  });
+  const MARTIN = 'orgMartinUid1234567';
+  const OWN = '2026-11-18_2100';
+  try {
+    await testEnv.clearFirestore();
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const db = context.firestore();
+      await setDoc(doc(db, 'users', ORG), { role: 'organizer', name: 'Gustavo', email: 'g@demo.local', active: true, createdAt: 1 });
+      await setDoc(doc(db, 'users', MARTIN), { role: 'organizer', name: 'Martín', email: 'm@demo.local', active: true, createdAt: 1 });
+      await setDoc(doc(db, 'roster', ROSTER), { name: NAME, holders: [ORG, MARTIN], createdByUid: ORG, createdAt: 1, updatedAt: 1 });
+      await setDoc(doc(db, 'matches', MATCH), {
+        date: '2026-11-17', time: '17:00', venueName: 'Polideportivo Colegiales',
+        capacity: 14, createdByUid: MARTIN, viewers: ['*'], adders: ['*'], playerCount: 0, playerVisible: true,
+      });
+      await setDoc(doc(db, 'matches', OWN), {
+        date: '2026-11-18', time: '21:00', venueName: 'Polideportivo Colegiales',
+        capacity: 14, createdByUid: MARTIN, viewers: [MARTIN], adders: [MARTIN], playerCount: 0, playerVisible: true,
+      });
+      await setDoc(doc(db, 'shareTokens', SHARE), { uid: ORG, name: 'Gustavo', createdAt: 1 });
+    });
+    const anon = testEnv.unauthenticatedContext().firestore();
+    let count = 0;
+    const charge = (playerId) => assertSucceeds(runTransaction(anon, async (tx) => {
+      const ref = doc(anon, 'signupRates', ROSTER);
+      const snap = await tx.get(ref);
+      const prev = snap.exists() ? snap.data() : null;
+      count += 1;
+      tx.set(ref, { windowStart: prev ? prev.windowStart : serverTimestamp(), count, lastId: playerId });
+    }));
+    const shared = 'm2sharedgustavo01';
+    await charge(shared);
+    await assertSucceeds(setDoc(doc(anon, 'players', shared), payload(shared)));
+
+    // Partido solo de Martín: el enlace de Gustavo no puede ponerse como organizador.
+    const mine = 'm2onlymartin00001';
+    await charge(mine);
+    await assertFails(setDoc(doc(anon, 'players', mine), { ...payload(mine), matchId: OWN, matchDate: '2026-11-18', viewers: [MARTIN], adders: [MARTIN] }));
+
+    // El token tiene que ser del organizador que figura.
+    const forged = 'm2forgedmartin001';
+    await charge(forged);
+    await assertFails(setDoc(doc(anon, 'players', forged), {
+      ...payload(forged), addedByUid: MARTIN, addedBy: 'Martín', signedUpWith: MARTIN, signedUpWithName: 'Martín',
+    }));
+  } finally {
+    await testEnv.cleanup();
+  }
+});
