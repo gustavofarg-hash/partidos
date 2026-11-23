@@ -2,7 +2,7 @@
 // confirmar.html y las pruebas. No abre WhatsApp ni escribe en Firestore.
 import { attendanceWhen, clockTime, confirmScheduleText, confirmSlotLabel, labelDate, todayISO, toEpoch } from './dates.js';
 import { sameOrganizer } from './organizers.js';
-import { givenName, personKey } from './roster.js';
+import { givenName, personKey, visibleRosterPhone } from './roster.js';
 import { playerAccess } from './access.js';
 import { waSendUrl } from './phone.js';
 import { publicAppOrigin } from './trial.js';
@@ -259,6 +259,20 @@ export function reminderDueAt(match) {
 export function playersForOrganizer(players, organizer) {
   if (!organizer) return [];
   return (players || []).filter((player) => sameOrganizer(player?.addedBy, organizer));
+}
+
+/**
+ * v238: el WhatsApp que muestra la lista del partido. Si la fila no trae número
+ * (alta por el link, o el número quedó solo en la ficha), usa el de la ficha de
+ * Jugadores que este organizador ve, igual que la lista. Antes los recordatorios
+ * miraban solo la fila y pedían «Cargar WhatsApp» con el número ya cargado.
+ */
+export function withAgendaPhones(players, roster, actor) {
+  return (players || []).map((p) => {
+    if (!p || String(p.phone || '').trim()) return p;
+    const phone = visibleRosterPhone(p, roster, actor);
+    return phone ? { ...p, phone, phonePrivate: false, hasPhone: true } : p;
+  });
 }
 
 /** Quien juega y tiene WhatsApp. La lista de espera no juega: no entra. */

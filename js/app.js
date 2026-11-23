@@ -13,7 +13,7 @@ import { moveWaiting, nextWaitOrder, overflowPatches, rosterSplit, sortWaiting }
 import {
   attendanceMessage, cancelLinks, confirmPageUrl, confirmStatus, confirmSummary, matchesCrossingReminderWindow, upcomingConfirmSlots,
   needsReminderBanner, playersForOrganizer, promotionMessage, reminderDueAt, reminderLinks, reminderProgress, unconfirmedForReminder,
-  reservationClearedByAnswer,
+  reservationClearedByAnswer, withAgendaPhones,
 } from './reminders.js';
 import { PRIVATE_WA_TEXT } from './privacy.js';
 import { playerMoreItems, playerShareTarget } from './player-more.js';
@@ -49,7 +49,7 @@ import {
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v237';
+const APP_VERSION = 'f7c-v238';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -2499,7 +2499,7 @@ function confirmPlayerPlace(player, okMsg) {
 const REMINDER_BANNER = 'Faltan 2 horas: mandá los recordatorios';
 
 function myReminderPlayers(matchId) {
-  return playersForOrganizer(playersOf(matchId), app.who);
+  return playersForOrganizer(withAgendaPhones(playersOf(matchId), app.roster, actor()), app.who);
 }
 
 function reminderBanners(matches) {
@@ -2529,7 +2529,8 @@ function bindReminderBanners() {
 
 async function openReminders(m) {
   if (m?.cancelled === true) { toast('El partido está cancelado. No se mandan recordatorios.'); return; }
-  const everyone = playersOf(m.id);
+  // v238: con el número de la ficha si la fila no lo trae (lo mismo que muestra la lista).
+  const everyone = withAgendaPhones(playersOf(m.id), app.roster, actor());
   if (!everyone.length) { toast('No hay jugadores para avisar'); return; }
   let showAll = false;
   openSheet(`<h3>Enviar recordatorios</h3><p class="hint">Armando los links…</p>`);
