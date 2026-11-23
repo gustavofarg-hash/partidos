@@ -82,7 +82,7 @@ main#view { overflow-anchor: none; }
 @keyframes swipe-next { from { transform: translateX(14px); opacity: .7; } to { transform: none; opacity: 1; } }
 @keyframes swipe-prev { from { transform: translateX(-14px); opacity: .7; } to { transform: none; opacity: 1; } }
 .brand { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
-.brand img { border-radius: 8px; width: 30px; height: 30px; }
+.brand img { border-radius: 8px; width: 30px; height: 30px; touch-action: manipulation; cursor: pointer; }
 .brand-title { font-weight: 800; font-size: 1.125rem; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .brand-sub { font-size: 0.78125rem; opacity: .85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .text-size { display: flex; flex: none; gap: 2px; }
@@ -688,7 +688,7 @@ button.team-name {
   min-width: 28px; height: 28px; padding: 0; border-radius: 8px; font-weight: 800;
   font-variant-numeric: tabular-nums; display: grid; place-items: center;
 }
-.goal-box button { border: 1px solid var(--line); background: var(--bg); color: inherit; font: inherit; font-weight: 800; }
+.goal-box button { border: 1px solid var(--line); background: var(--bg); color: inherit; font: inherit; font-weight: 800; touch-action: pan-y; }
 .goal-n { color: var(--muted); }
 .team-ico, .team-x {
   flex: 0 0 36px; width: 36px; height: 36px; padding: 0; border: 1px solid var(--line);

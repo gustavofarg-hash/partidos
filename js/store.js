@@ -776,6 +776,7 @@ class LocalStore {
     db.confirmations ||= {};
     const players = Object.entries(db.players).map(([id, player]) => ({ id, ...player }));
     const matches = Object.entries(db.matches).map(([id, match]) => ({ id, ...match }));
+    const roster = Object.entries(db.roster || {}).map(([id, person]) => ({ id, ...person }));
     const now = new Date();
     const live = new Set();
     for (const player of players) {
@@ -787,6 +788,7 @@ class LocalStore {
         playerId: player.id,
         player: { ...player, confirmed: prev.confirmed != null ? prev.confirmed : player.confirmed, confirmedAt: prev.confirmedAt != null ? prev.confirmedAt : player.confirmedAt },
         match,
+        roster,
       });
       const slots = upcomingConfirmSlots({ players, matches, player, now });
       if (slots.length >= 2 && slots.some((slot) => slot.token === player.confirmToken)) next.also = slots;
@@ -3763,7 +3765,7 @@ export class FirebaseStore {
   async _putConfirmation(token, playerId, player, match, slots) {
     if (!token) return;
     const { doc, setDoc } = this.fs;
-    const body = confirmationIdentity({ playerId, player, match });
+    const body = confirmationIdentity({ playerId, player, match, roster: this.state.roster });
     const listed = slots.some((slot) => slot.token === token);
     body.also = listed && slots.length >= 2 ? slots : [];
     await setDoc(doc(this.db, 'confirmations', token), body, { merge: true });
@@ -4519,7 +4521,7 @@ export class FirebaseStore {
     const cref = doc(this.db, 'confirmations', token);
     if (yes) {
       const match = this.state.matches.find((item) => item.id === player.matchId);
-      const body = confirmationIdentity({ playerId: id, player: { ...player, confirmToken: token }, match });
+      const body = confirmationIdentity({ playerId: id, player: { ...player, confirmToken: token }, match, roster: this.state.roster });
       await setDoc(cref, { ...body, confirmed: 'si', confirmedAt: now }, { merge: true });
     } else {
       try { await updateDoc(cref, { confirmed: deleteField(), confirmedAt: deleteField() }); }
