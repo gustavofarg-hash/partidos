@@ -4052,16 +4052,46 @@ export class FirebaseStore {
       () => {},
     ));
   }
+  /**
+   * Organizador del enlace, leído de shareTokens/{token} si todavía no llegó.
+   * Sin organizador no se anota: el alta quedaría sin dueño y no entra en
+   * Faltan pagar ni en la compensación.
+   */
+  async _linkOrganizer(organizer) {
+    const given = linkStamp(organizer);
+    if (given?.token) return given;
+    const token = String(organizer?.token || this._shareToken || '').trim();
+    const fail = () => Object.assign(
+      new Error('No pudimos saber quién es el organizador de este enlace. Pedile que te lo mande de nuevo.'),
+      { code: 'no-organizer' },
+    );
+    if (!token) throw fail();
+    const current = this.shareOrganizer(token);
+    if (current?.uid && current?.name) return linkStamp(current);
+    let data = null;
+    try {
+      const { doc, getDoc } = this.fs;
+      const snap = await getDoc(doc(this.db, 'shareTokens', token));
+      data = snap.exists() ? snap.data() : null;
+    } catch (error) {
+      console.error(error?.code || 'sin-codigo', error);
+      data = null;
+    }
+    const found = linkStamp({ uid: data?.uid, name: data?.name, token });
+    if (!found) throw fail();
+    if (token === this._shareToken) this.state.shareOrganizer = { uid: found.uid, name: String(data.name || ''), token };
+    return found;
+  }
   async _guestSelfJoin(match, person, { waiting = false, organizer = null } = {}) {
     const rosterId = String(person?.id || '').trim();
     if (!rosterId) throw Object.assign(new Error('No tiene ficha.'), { code: 'no-roster' });
+    const org = await this._linkOrganizer(organizer);
     const id = rid();
     await this._chargeSignupRate(rosterId, id);
     const now = Date.now();
     const mates = this.state.players.filter((row) => row.matchId === match.id);
     const access = playerAccess(match);
     const onWait = waiting === true;
-    const org = linkStamp(organizer, person);
     const player = {
       matchId: match.id,
       matchDate: match.date,
@@ -4073,9 +4103,11 @@ export class FirebaseStore {
       tentative: !onWait,
       tentativeAt: onWait ? null : now,
       rosterAt: onWait ? null : now,
-      addedByUid: org?.uid || '',
-      addedBy: org?.name || String(person?.name || '').slice(0, 40),
-      ...(org ? { signedUpWith: org.uid, signedUpWithName: org.name, shareToken: org.token } : { shareToken: '' }),
+      addedByUid: org.uid,
+      addedBy: org.name,
+      signedUpWith: org.uid,
+      signedUpWithName: org.name,
+      shareToken: org.token,
       createdAt: now,
       updatedAt: now,
       phone: '',

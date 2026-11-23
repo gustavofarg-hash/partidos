@@ -1,5 +1,6 @@
 // Cálculo de compensación del día entre organizadores. Puro.
 import { awaitingItems, isFreePlay, paymentParts, paymentShares, roundARS } from './payments.js';
+import { orphanSelfSignupOwner } from './ledger.js';
 export function splitModeOf(match) {
   return match?.splitMode === 'signed' ? 'signed' : 'equal';
 }
@@ -48,6 +49,35 @@ function staffByName(staff) {
     if (!wanted) return null;
     return list.find((user) => String(user.name || '').trim().toLowerCase() === wanted) || null;
   };
+}
+
+/**
+ * A quién le corresponde un jugador en «según quién anotó».
+ * Se anotó con (uid o nombre), después Agregó. En Autoservicio, Agregó puede
+ * tener el nombre del propio jugador: ahí vale el uid, el token o el creador del partido.
+ * null: no se sabe de quién es.
+ */
+export function signedOwner(player, match, staff) {
+  const list = staff || [];
+  const byUid = (uid) => (uid ? list.find((user) => user?.uid === uid) || null : null);
+  const byName = staffByName(list);
+  const pick = (user) => (user ? { uid: user.uid, name: user.name || '' } : null);
+  const signedUid = String(player?.signedUpWith || '').trim();
+  const signedName = String(player?.signedUpWithName || '').trim();
+  if (signedUid || signedName) {
+    const user = byUid(signedUid) || byName(signedName);
+    if (user) return pick(user);
+    return signedName ? { uid: `name:${signedName.toLowerCase()}`, name: signedName } : null;
+  }
+  if (player?.selfSignup === true) {
+    const addedUid = String(player?.addedByUid || '').trim();
+    if (addedUid) return pick(byUid(addedUid) || byName(player?.addedBy));
+    const owner = orphanSelfSignupOwner(player, match);
+    return owner ? pick(byUid(owner.uid)) : null;
+  }
+  const added = String(player?.addedBy || '').trim();
+  if (!added) return null;
+  return pick(byName(added)) || { uid: `name:${added.toLowerCase()}`, name: added };
 }
 
 function playerAmount(player) {
@@ -103,16 +133,18 @@ export function matchCompensation(match, players, staff) {
     total = roundARS(total + amount);
     for (const slice of collectedSlices(player, staff)) addMoney(rows, slice.uid, slice.name, slice.amount);
   }
+  const ordered = [...adders].sort((a, b) => a.name.localeCompare(b.name, 'es') || a.uid.localeCompare(b.uid));
   if (splitModeOf(match) === 'signed') {
+    let unassigned = 0;
     for (const player of people) {
       const amount = playerAmount(player);
-      const name = player.signedUpWithName || player.addedBy || '';
-      const user = staffByName(staff)(name);
-      if (user) addEntitled(rows, user.uid, user.name, amount);
-      else if (name && amount > 0) addEntitled(rows, `name:${name.toLowerCase()}`, name, amount);
+      const owner = signedOwner(player, match, staff);
+      if (!owner) unassigned = roundARS(unassigned + amount);
+      else if (amount > 0 || !owner.uid.startsWith('name:')) addEntitled(rows, owner.uid, owner.name, amount);
     }
+    // Sin organizador conocido: se reparte entre los que pueden anotar, como en partes iguales.
+    if (unassigned > 0) for (const share of splitEqual(unassigned, ordered)) addEntitled(rows, share.uid, share.name, share.amount);
   } else {
-    const ordered = [...adders].sort((a, b) => a.name.localeCompare(b.name, 'es') || a.uid.localeCompare(b.uid));
     for (const share of splitEqual(total, ordered)) addEntitled(rows, share.uid, share.name, share.amount);
   }
   return { missing, total, rows: [...rows.values()] };

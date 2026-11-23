@@ -49,7 +49,7 @@ import {
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v228';
+const APP_VERSION = 'f7c-v229';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -5101,7 +5101,7 @@ function organizerDropPhone(match) {
 
 function selfSignupFailureText(kind, error) {
   const code = String(error?.code || '');
-  if (code === 'rate-limit' || code === 'too-late' || code === 'no-roster' || code === 'already-in-match' || code === 'suspended' || code === 'match-full' || code === 'guest-cannot-invite') {
+  if (code === 'rate-limit' || code === 'too-late' || code === 'no-roster' || code === 'already-in-match' || code === 'suspended' || code === 'match-full' || code === 'guest-cannot-invite' || code === 'no-organizer') {
     return String(error?.message || 'No se pudo guardar');
   }
   const verb = kind === 'wait'
@@ -5130,7 +5130,7 @@ function bindSelfSignup(person) {
       app.selfSignupError = null;
     } catch (e) {
       const code = String(e?.code || '');
-      if (!['rate-limit', 'too-late', 'no-roster', 'already-in-match', 'suspended', 'match-full', 'guest-cannot-invite'].includes(code)) {
+      if (!['rate-limit', 'too-late', 'no-roster', 'already-in-match', 'suspended', 'match-full', 'guest-cannot-invite', 'no-organizer'].includes(code)) {
         console.error(code || 'sin-codigo', e);
       }
       app.selfSignupError = { matchId: match.id, text: selfSignupFailureText(kind, e) };
@@ -6755,7 +6755,7 @@ function openPaymentForm(m, p, opts = {}) {
     const me = actor();
     const rows = [];
     for (const other of app.players) {
-      if (!key || personKey(other, app.players) !== key || !owesOrganizer(other, me)) continue;
+      if (!key || personKey(other, app.players) !== key || !owesOrganizer(other, me, knownMatches().find((item) => item.id === other.matchId))) continue;
       const owed = amountOwed(other, { players: app.players, matches: knownMatches(), prices: livePrices(), ...rosterGate() });
       if (!(owed > 0)) continue;
       const match = knownMatches().find((item) => item.id === other.matchId);
@@ -7428,7 +7428,7 @@ function creditDebtsFor(player, person) {
   const rows = [];
   for (const other of app.players) {
     const key = personKey(other, app.players);
-    if (!key || !keys.has(key) || !owesOrganizer(other, me)) continue;
+    if (!key || !keys.has(key) || !owesOrganizer(other, me, knownMatches().find((item) => item.id === other.matchId))) continue;
     const owed = amountOwed(other, { players: app.players, matches: knownMatches(), prices: livePrices(), ...rosterGate() });
     if (!(owed > 0)) continue;
     const match = knownMatches().find((item) => item.id === other.matchId);
