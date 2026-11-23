@@ -24,6 +24,7 @@
 //    El número está en playerContacts/{playerId}, no acá.
 //    addedBy: "Gustavo" | "Martín"
 //    signedUpWith, signedUpWithName: organizador con quien se anotó (uid + nombre)
+//    acceptedBy: string                 (v235: organizador que aceptó la anotación del Autoservicio)
 //    goals: int opcional 0..99. Goles de ese jugador en el partido. No cambia matches.score.
 //    inGoal: bool opcional. Marcó que fue al arco. No cambia el marcador.
 //    inGoalAt: number opcional. Cuándo lo marcó. Ordena a los que ya fueron: el primero arriba.
@@ -38,10 +39,10 @@
 //    waitOrder: number|null             (menor = más prioridad; null si es titular)
 //    rosterAt: number|null              (cuándo entró a la lista principal)
 //    confirmToken: string               (link largo de confirmar.html; se crea al anotar)
-//    shortCode: string                  (8 caracteres; el mensaje usa /c/?k=shortCode)
+//    shortCode: string                  (v235: ya no se crea; los viejos quedan y /c/?k= los sigue abriendo)
 //  links/{code}
 //    m: matchId, p: playerId, t: confirmToken
-//    shortUrl, shortProvider ('spoo'|'dagd'), shortAt   (cache del acortador; se escribe al mandar)
+//    shortUrl, shortProvider ('spoo'|'dagd'), shortAt   (datos viejos del acortador, retirado en v235; no se escriben más)
 //    El código es el id. Se lee sin cuenta, igual que confirmations. No se lista.
 //    confirmed: "si"|"no"               (respuesta del jugador)
 //    confirmedAt, reminderSentAt: number
@@ -100,8 +101,7 @@ import { tokenDocId } from './push.js';
 import { newShareToken } from './share.js';
 import { bumpGoals, bumpScore, dropPlayer, nextInGoalAt, scoreRecord, teamsRecord } from './teams.js';
 import { confirmationIdentity, confirmationRecord, newConfirmToken, overlayConfirmations, upcomingConfirmSlots } from './reminders.js';
-import { isShortCode, newShortCode } from './short.js';
-import { acceptedExternalShort } from './shorten.js';
+import { isShortCode } from './short.js';
 import { ALREADY_IN_MATCH, ALREADY_SIGNED_UP, alreadyInMatch, duplicateText, phoneTakenText, selfAlreadyInMatch, selfSignupPlayerId, inviteBlock, isAutoGuestName, sameDayPromoGuestEditPatches, sameDayPromoGuestNickPatches } from './guests.js';
 import { GUARD_COLLECTION, guardKeyFor, guardMoves, newPlayerDocId, permissionDenied, phoneGuardDoc, phoneGuardId } from './phone-guard.js';
 import { EVERYONE, accessPatch, canAdd, canView, playerAccess } from './access.js';
@@ -459,6 +459,16 @@ function refusePlayedCancel(match, data) {
   }
 }
 
+/**
+ * v235: quién aceptó una anotación del Autoservicio. Solo cuando el organizador
+ * toca Confirmar (no cuando la reserva se libera sola por un «Sí, juego»).
+ */
+export function acceptedByPatch(player, actor, opts = {}) {
+  if (opts?.accepted !== true || !isSelfPending(player)) return {};
+  const name = String(actor?.name || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+  return name ? { acceptedBy: name } : {};
+}
+
 function selfSignupDetail(player, waiting) {
   if (player?.selfSignup === true && player?.tentative === true) return 'Pendiente de confirmación';
   if (waiting && player?.selfSignup === true) return 'Se anotó solo en la lista de espera';
@@ -783,57 +793,6 @@ class LocalStore {
     }
     for (const token of Object.keys(db.confirmations)) if (!live.has(token)) delete db.confirmations[token];
   }
-  _touchLinks(db) {
-    db.links ||= {};
-    const live = new Set();
-    for (const [pid, player] of Object.entries(db.players)) {
-      if (!player?.confirmToken) continue;
-      let code = player.shortCode;
-      const current = code && db.links[code];
-      if (!isShortCode(code) || (current && current.t && current.t !== player.confirmToken)) {
-        code = newShortCode();
-        while (db.links[code]) code = newShortCode();
-        player.shortCode = code;
-      }
-      const prev = db.links[code] || {};
-      const next = { m: player.matchId, p: pid, t: player.confirmToken };
-      const cached = prev.t === player.confirmToken ? acceptedExternalShort(prev) : null;
-      if (cached) {
-        next.shortUrl = cached.shortUrl;
-        next.shortProvider = cached.shortProvider;
-        next.shortAt = typeof prev.shortAt === 'number' ? prev.shortAt : Date.now();
-      }
-      db.links[code] = next;
-      live.add(code);
-    }
-    for (const code of Object.keys(db.links)) if (!live.has(code)) delete db.links[code];
-  }
-  async ensureShortLink(id) {
-    const db = this._load();
-    const player = db.players[id];
-    if (!player?.confirmToken) return '';
-    if (isShortCode(player.shortCode) && db.links?.[player.shortCode]?.t === player.confirmToken) return player.shortCode;
-    this._save(db);
-    return this._load().players[id]?.shortCode || '';
-  }
-  async readExternalShort(code) {
-    if (!isShortCode(code)) return null;
-    const row = this._load().links?.[code];
-    const parsed = acceptedExternalShort(row);
-    return parsed ? { ...parsed, shortAt: row.shortAt } : null;
-  }
-  async saveExternalShort(code, rec) {
-    if (!isShortCode(code)) return;
-    const parsed = acceptedExternalShort(rec);
-    if (!parsed) return;
-    const db = this._load();
-    const row = db.links?.[code];
-    if (!row) return;
-    row.shortUrl = parsed.shortUrl;
-    row.shortProvider = parsed.shortProvider;
-    row.shortAt = Date.now();
-    this._save(db);
-  }
   _seedOrganizers(db) {
     if (Object.keys(db.organizers).length) return false;
     const now = Date.now();
@@ -863,7 +822,6 @@ class LocalStore {
     migratePhones(db);
     this._syncPlayerCounts(db);
     this._touchConfirmations(db);
-    this._touchLinks(db);
     localStorage.setItem(this.key, JSON.stringify(db));
     this._emit();
   }
@@ -923,7 +881,6 @@ class LocalStore {
     this._seedOrganizers(db);
     this._seedVenues(db);
     this._touchConfirmations(db);
-    this._touchLinks(db);
     localStorage.setItem(this.key, JSON.stringify(db));
   }
   subscribe(fn) { this.listeners.add(fn); setTimeout(() => this._emit()); return () => this.listeners.delete(fn); }
@@ -1185,7 +1142,7 @@ class LocalStore {
     const player = this._load().players[playerId];
     if (!player?.tentative) return null;
     const pending = isSelfPending(player);
-    await this.clearTentative(playerId);
+    await this.clearTentative(playerId, { accepted: true });
     if (!pending) return null;
     const db = this._load();
     const match = { id: player.matchId, ...(db.matches[player.matchId] || {}) };
@@ -1503,9 +1460,9 @@ class LocalStore {
     })]);
     this._save(db);
   }
-  async clearTentative(id) {
+  async clearTentative(id, opts = {}) {
     const player = this._load().players[id];
-    await this.updatePlayer(id, { tentative: null, tentativeAt: null });
+    await this.updatePlayer(id, { tentative: null, tentativeAt: null, ...acceptedByPatch(player, this._actor(), opts) });
     if (!isSelfPending(player)) return;
     const db = this._load();
     const match = db.matches[player.matchId] || {};
@@ -2020,7 +1977,6 @@ export class FirebaseStore {
     this._migrating = false;
     this._contactsLive = false;
     this._linksLive = false;
-    this._shortCodes = new Map();
     this._historyFilter = null;
     this._queryDay = '';
     this._datedCutoff = '';
@@ -3946,7 +3902,6 @@ export class FirebaseStore {
       }
     }
     await this._writeConfirmation(token, ref.id, player, match);
-    await this.ensureShortLink(ref.id, { matchId: match.id, confirmToken: token });
     if (!(selfHold || opts.selfSignup === true)) await this._appendLogs([partidoEntry(this._actor(), stored, this.state.venues, {
       type: 'alta',
       ...playerLogFields({ id: ref.id, ...player }, [...mates, { id: ref.id, ...player }]),
@@ -4329,7 +4284,7 @@ export class FirebaseStore {
     if (!player?.tentative) return null;
     const pending = isSelfPending(player);
     const match = this.state.matches.find((row) => row.id === player.matchId) || { id: player.matchId };
-    await this.clearTentative(playerId);
+    await this.clearTentative(playerId, { accepted: true });
     if (!pending) return null;
     try { await this._writeSignupPing('confirmado', { ...player, id: playerId }, match, null); }
     catch { /* sin la función el teléfono no suena, y la confirmación queda */ }
@@ -4738,9 +4693,9 @@ export class FirebaseStore {
       detail: '',
     })]);
   }
-  async clearTentative(id) {
+  async clearTentative(id, opts = {}) {
     const player = this.state.players.find((row) => row.id === id);
-    await this.updatePlayer(id, { tentative: null, tentativeAt: null });
+    await this.updatePlayer(id, { tentative: null, tentativeAt: null, ...acceptedByPatch(player, this._actor(), opts) });
     if (!isSelfPending(player)) return;
     const match = this.state.matches.find((row) => row.id === player.matchId) || { id: player.matchId };
     await this._appendLogs([selfMoveEntry(match, this.state.venues, player, {
@@ -4749,69 +4704,6 @@ export class FirebaseStore {
       actorName: this._actor().name,
       actorUid: this._actor().uid,
     })]);
-  }
-  async ensureShortLink(id, hint) {
-    const p = this.state.players.find((x) => x.id === id) || hint || null;
-    const token = p?.confirmToken || hint?.confirmToken || '';
-    if (!token) return '';
-    const known = isShortCode(p?.shortCode) ? p.shortCode : (this._shortCodes.get(id) || '');
-    if (isShortCode(known)) return known;
-    const mint = this._mintShortLink(id, p?.matchId || hint?.matchId || '', token).catch((e) => {
-      if (e?.code === 'permission-denied') this._linksLive = false;
-      else console.error(e);
-      return '';
-    });
-    return await Promise.race([
-      mint,
-      new Promise((resolve) => setTimeout(() => resolve(''), 2000)),
-    ]);
-  }
-  async _mintShortLink(id, matchId, token) {
-    const { doc, getDoc, setDoc, updateDoc } = this.fs;
-    for (let n = 0; n < 4; n++) {
-      const code = newShortCode();
-      const ref = doc(this.db, 'links', code);
-      const cur = await getDoc(ref);
-      if (cur.exists()) continue;
-      await setDoc(ref, { m: matchId, p: id, t: token });
-      try {
-        await updateDoc(doc(this.db, 'players', id), { shortCode: code });
-      } catch (e) {
-        if (e?.code !== 'permission-denied') console.error(e);
-      }
-      this._linksLive = true;
-      this._shortCodes.set(id, code);
-      return code;
-    }
-    return '';
-  }
-  async readExternalShort(code) {
-    if (!isShortCode(code)) return null;
-    try {
-      const { doc, getDoc } = this.fs;
-      const snap = await getDoc(doc(this.db, 'links', code));
-      if (!snap.exists()) return null;
-      const data = snap.data();
-      const parsed = acceptedExternalShort(data);
-      return parsed ? { ...parsed, shortAt: data.shortAt } : null;
-    } catch {
-      return null;
-    }
-  }
-  async saveExternalShort(code, rec) {
-    if (!isShortCode(code)) return;
-    const parsed = acceptedExternalShort(rec);
-    if (!parsed) return;
-    try {
-      const { doc, updateDoc } = this.fs;
-      await updateDoc(doc(this.db, 'links', code), {
-        shortUrl: parsed.shortUrl,
-        shortProvider: parsed.shortProvider,
-        shortAt: Date.now(),
-      });
-    } catch (e) {
-      if (e?.code !== 'permission-denied') console.error(e);
-    }
   }
   async ensureConfirmToken(id) {
     const p = this.state.players.find((x) => x.id === id);
@@ -4824,7 +4716,6 @@ export class FirebaseStore {
     const fresh = this.state.players.find((x) => x.id === id) || p;
     const match = this.state.matches.find((item) => item.id === fresh.matchId);
     await this._writeConfirmation(token, id, { ...fresh, confirmToken: token }, match);
-    await this.ensureShortLink(id, { matchId: fresh.matchId, confirmToken: token, shortCode: fresh.shortCode });
     return token;
   }
   async markReminderSent(id) {

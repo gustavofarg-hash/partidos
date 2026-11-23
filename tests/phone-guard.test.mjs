@@ -76,7 +76,6 @@ function fakeStore({ actor = { uid: 'gus', name: 'Gustavo', role: 'organizer' },
   store.state.suspensions = [];
   const log = { batches: [], singles: [], reads: [] };
   store._writeConfirmation = async () => {};
-  store.ensureShortLink = async () => {};
   store._appendLogs = async () => {};
   store._writeSignupPing = async () => {};
   store._chargeSignupRate = async () => {};

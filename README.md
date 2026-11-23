@@ -222,20 +222,19 @@ Si se publican las reglas antes que la app, la versión vieja no puede anotar co
 | `waitOrder` | número o null — menor = más arriba en la espera. Los nuevos van al final |
 | `rosterAt` | número o null — cuándo pasó a la lista principal |
 | `confirmToken` | string — token del link largo de confirmación. Se crea al anotar al jugador. Si un jugador viejo no lo tiene, la app lo escribe la primera vez que lo ve (sin abrir el flujo de envío) |
-| `shortCode` | string de 8 caracteres base62. Apunta a `links/{shortCode}`. El WhatsApp usa `/c/?k=` |
+| `shortCode` | string de 8 caracteres base62. Apunta a `links/{shortCode}`. Desde f7c-v235 ya no se crea: queda en jugadores viejos y `/c/?k=` lo sigue abriendo |
 | `confirmed` | `"si"` \| `"no"` — respuesta del jugador |
 | `confirmedAt` | número (epoch ms) |
 | `reminderSentAt` | número (epoch ms) — cuándo se abrió el WhatsApp del recordatorio |
 | `tentative` | bool o null — lugar reservado, a confirmar. Ocupa un cupo y no es un sí |
 | `tentativeAt` | número (epoch ms) o null — cuándo se reservó |
+| `acceptedBy` | string o ausente — v235: nombre del organizador que tocó «Confirmar lugar» en una anotación del Autoservicio. El Autoservicio muestra «Confirmado (por {primer nombre})». Sin el campo: si lo anotó un organizador, ese (`signedUpWithName` o `addedBy`); si fue una anotación del Autoservicio aceptada antes de v235, «Confirmado» solo |
 
 Hay que **volver a publicar** `firestore.rules` para que `tentative` (bool o null) y `tentativeAt` (número o null) queden validados. Las reglas ya publicadas igual dejan escribir esos campos, porque `validPayment` no cierra la lista. Republicar rechaza un texto en lugar de bool o número. `settings/prices` ya es una colección aparte: el cierre `match /{document=**}` la niega hasta republicar. Mientras tanto la app usa 5000, 9000 y 12000 y avisa en castellano. Después de publicar, un precio negativo o con centavos queda rechazado, y cualquier organizador activo puede leer y guardar los tres precios.
 
-**Recordatorio:** un partido cancelado no muestra el cartel ni arma recordatorios. En el partido, **Enviar recordatorios** arma un mensaje por jugador con WhatsApp y un link corto `c/?k=<código>`. Arranca en **Mis jugadores** (los que anotó quien está logueado; «Gustavo» y «Martín» viejos cuentan para esas cuentas). **Todos** muestra el partido entero. La página de confirmación no pide cuenta. El link corto lee `links/{código}` y abre la misma `confirmar.html?m=&p=&t=`. Esa página lee la ficha pública `confirmations/{token}` (sin teléfono) y, si el token coincide, guarda solo `confirmed` y `confirmedAt`. El link largo viejo sigue abriendo esa página directo.
+**Recordatorio:** un partido cancelado no muestra el cartel ni arma recordatorios. En el partido, **Enviar recordatorios** arma un mensaje por jugador con WhatsApp y el link completo `confirmar.html?m=&p=&t=`. Arranca en **Mis jugadores** (los que anotó quien está logueado; «Gustavo» y «Martín» viejos cuentan para esas cuentas). **Todos** muestra el partido entero. La página de confirmación no pide cuenta. Esa página lee la ficha pública `confirmations/{token}` (sin teléfono) y, si el token coincide, guarda solo `confirmed` y `confirmedAt`. Un link corto viejo `c/?k=` lee `links/{código}` y abre la misma página.
 
-**Link corto.** El mensaje de WhatsApp (recordatorio, aviso al subir de la espera, y el «¿Confirmás?» del botón del partido) lleva `https://gustavofarg-hash.github.io/futbol-colegiales/c/?k=` más 8 caracteres. `c/index.html` lee `links/{código}` (`m`, `p`, `t`) y redirige a `confirmar.html` con esos tres datos. No hay acortador externo. Si escribir `links` tarda más de 2 segundos o las reglas todavía no lo permiten, el mensaje usa el link largo. El botón de WhatsApp del perfil (sin un partido elegido) sigue abriendo el chat sin link de confirmación. El aviso de cancelación tampoco lleva link.
-
-Hay que **volver a publicar** `firestore.rules` para abrir `links`. Se puede publicar la app antes: sin esa regla los mensajes siguen con el link largo. El mismo archivo trae las reglas de contactos y de `phone` vacío. Si esas todavía no están publicadas, el orden de los tres pasos de arriba sigue valiendo: app, después reglas, después abrir la app para migrar. Si los contactos ya están publicados, republicar este archivo solo suma `links` y el `shortCode` opcional del jugador.
+**Link corto (retirado en f7c-v235).** Los mensajes de WhatsApp (recordatorio, aviso al subir de la espera, el «¿Confirmás?» del botón del partido y el enlace del jugador) llevan siempre el link completo. La app ya no crea `shortCode` ni escribe `links/{código}`, y no llama a ningún acortador externo. Los links cortos que ya se mandaron siguen funcionando: `c/index.html` lee `links/{código}` (`m`, `p`, `t`) y redirige a `confirmar.html`. Los documentos viejos de `links` quedan como están. Las reglas de `links` no cambiaron: la de lectura sigue haciendo falta para esos links; las de crear y actualizar (incluidos `shortUrl`, `shortProvider`, `shortAt`) ya no se usan. El botón de WhatsApp del perfil (sin un partido elegido) sigue abriendo el chat sin link de confirmación. El aviso de cancelación tampoco lleva link.
 
 La lista del organizador muestra esa ficha, no el campo `confirmed` del jugador. Al anotar, al cobrar o al abrir la app, el organizador actualiza nombre, fecha y hora de la ficha y **no vuelve a escribir** `confirmed` ni `confirmedAt`. Así un «Sí, juego» no se borra. Si el jugador ya tenía token pero no ficha, **Enviar recordatorios** (y la primera carga) crea la ficha igual.
 
@@ -285,19 +284,7 @@ El mensaje, igual que en la app:
 ¡Hola {primer nombre}! Te escribo por el fútbol 7 en Polideportivo Colegiales el {día} {dd}/{mm} a las {HH:MM} hs{ (nota)}. ¿Confirmás que jugás? Respondé en este link: {confirmUrl}
 ```
 
-`{día}` es el día de la semana en español y minúsculas (domingo … sábado) de esa fecha de calendario. La nota, si hay, se agrega entre paréntesis justo antes del punto, con un espacio: ` hs (Cancha 2).`. El link:
-
-```
-https://gustavofarg-hash.github.io/futbol-colegiales/c/?k={shortCode}
-```
-
-Ese link abre el mismo destino que el largo, que sigue funcionando:
-
-```
-https://gustavofarg-hash.github.io/futbol-colegiales/confirmar.html?m={matchId}&p={playerId}&t={confirmToken}
-```
-
-`waUrl` es `https://wa.me/{phone}?text={mensaje}` con el mensaje en `encodeURIComponent`. Un script puede copiar esa fórmula o importar `reminderLinks`.
+`{día}` es el día de la semana en español y minúsculas (domingo … sábado) de esa fecha de calendario. La nota, si hay, se agrega entre paréntesis justo antes del punto, con un espacio: ` hs (Cancha 2).`. El link es el completo de arriba.
 
 **Lista de espera:** se puede anotar a alguien aunque el partido no esté lleno. Si ya hay 14, el alta normal también cae en la espera (al final). Las flechas ↑ ↓ cambian `waitOrder` y los dos organizadores ven el mismo orden al toque. En cada fila, **Subir al partido** sube a esa persona (queda deshabilitado si ya hay 14). Al quitar un titular, se ofrece subir al primero. Después de cualquier subida, si tiene WhatsApp pregunta si avisarle: **Sí** abre `wa.me` con el mensaje y su link de confirmación; hay que tocar enviar. Sin número, solo un cartel.
 

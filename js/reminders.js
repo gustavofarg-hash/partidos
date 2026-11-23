@@ -5,7 +5,6 @@ import { sameOrganizer } from './organizers.js';
 import { givenName, personKey } from './roster.js';
 import { playerAccess } from './access.js';
 import { waSendUrl } from './phone.js';
-import { isShortCode, shortConfirmUrl } from './short.js';
 import { publicAppOrigin } from './trial.js';
 import { courtLabel, footballPhrase } from './venues.js';
 
@@ -29,7 +28,7 @@ export function confirmPageUrl({ matchId, playerId, token, origin = publicAppOri
   return url.href;
 }
 
-/** WhatsApp para confirmar asistencia. El link es el de esa persona, corto o largo. */
+/** WhatsApp para confirmar asistencia. El link es el de esa persona, siempre completo. */
 export function attendanceMessage({ player, roster, when, time, confirmUrl, slots, now }) {
   const first = givenName(player, roster);
   const hello = first ? `¡Hola ${first}!` : '¡Hola!';
@@ -335,9 +334,8 @@ export function reminderLinks({ match, players, venue, origin, choice, android, 
     const phone = String(p?.phone || '').trim();
     const token = p?.confirmToken;
     if (!phone || !token || !p.id) continue;
-    const confirmUrl = isShortCode(p.shortCode)
-      ? shortConfirmUrl(p.shortCode, origin)
-      : confirmPageUrl({ matchId: match.id, playerId: p.id, token, origin });
+    // v235: el link completo, sin link corto.
+    const confirmUrl = confirmPageUrl({ matchId: match.id, playerId: p.id, token, origin });
     const slots = upcomingConfirmSlots({ players: pool, matches: calendar, player: p, now });
     const text = reminderMessage({ player: p, match, confirmUrl, roster, now, slots });
     out.push({ id: p.id, name: p.name, phone, text, waUrl: waSendUrl({ phone, text, choice, android }), confirmUrl });
