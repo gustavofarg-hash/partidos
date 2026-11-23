@@ -484,7 +484,8 @@ service cloud.firestore {
           && (!('shortCode' in d) || (d.shortCode is string && d.shortCode.matches('^[0-9A-Za-z]{8}$')))
           && (!('invitedBy' in d) || (d.invitedBy is string && d.invitedBy.size() > 0 && d.invitedBy.size() <= 128))
           && (!('invitedByName' in d) || (d.invitedByName is string && d.invitedByName.size() > 0 && d.invitedByName.size() <= 60))
-          && (!('shortName' in d) || (d.shortName is string && d.shortName.size() <= 40));
+          && (!('shortName' in d) || (d.shortName is string && d.shortName.size() <= 40))
+          && (!('shareToken' in d) || (d.shareToken is string && d.shareToken.size() <= 80));
     }
 
     function posOk(x) {
@@ -809,9 +810,22 @@ service cloud.firestore {
     // Alta del organizador desde un lugar libre, la espera o Agregar jugador.
     // Va primero y no llama a validPlayer: esa función, con los campos del
     // alta, pasa el tope de 1000 expresiones y Firebase niega el permiso.
+    // Autoservicio: un documento por partido y ficha. Un segundo alta cae
+    // sobre el mismo id, es un update, y el enlace no puede hacer updates.
+    function selfSignupId(d) {
+      return d.matchId + '__' + d.rosterId;
+    }
+    // Token del enlace en un jugador que anota el organizador: el playerKey
+    // del partido o el token propio. Con eso su ficha lo ve en un «solo yo».
+    function organizerLinkTokenOk(d) {
+      return !('shareToken' in d) || d.shareToken == ''
+          || (d.shareToken is string && d.shareToken.size() >= 20 && d.shareToken.size() <= 80
+              && (d.shareToken == matchData(d.matchId).get('playerKey', '')
+                  || (exists(shareTokenPath(d.shareToken)) && shareTokenData(d.shareToken).uid == request.auth.uid)));
+    }
     function organizerSlotShape(d) {
       return d.keys().hasAll(['matchId', 'matchDate', 'name', 'addedBy', 'addedByUid', 'createdAt', 'updatedAt', 'viewers', 'adders'])
-          && d.keys().hasOnly(['matchId', 'matchDate', 'name', 'phone', 'addedBy', 'addedByUid', 'createdAt', 'updatedAt', 'waiting', 'waitOrder', 'rosterAt', 'confirmToken', 'hasPhone', 'phoneKey', 'phoneOwnerUid', 'phoneShared', 'viewers', 'adders', 'rosterId', 'signedUpWith', 'signedUpWithName', 'shortName', 'tentative', 'tentativeAt', 'selfSignup', 'invitedBy', 'invitedByName', 'guestAuto', 'shortCode'])
+          && d.keys().hasOnly(['matchId', 'matchDate', 'name', 'phone', 'addedBy', 'addedByUid', 'createdAt', 'updatedAt', 'waiting', 'waitOrder', 'rosterAt', 'confirmToken', 'hasPhone', 'phoneKey', 'phoneOwnerUid', 'phoneShared', 'viewers', 'adders', 'rosterId', 'signedUpWith', 'signedUpWithName', 'shortName', 'tentative', 'tentativeAt', 'selfSignup', 'invitedBy', 'invitedByName', 'guestAuto', 'shortCode', 'shareToken'])
           && d.matchId is string && d.matchId.size() > 0 && d.matchId.size() <= 80
           && d.matchDate is string && d.matchDate.size() == 10
           && d.name is string && d.name.size() > 0 && d.name.size() <= 60
@@ -838,7 +852,8 @@ service cloud.firestore {
           && (!('phoneOwnerUid' in d) || (d.phoneOwnerUid is string && d.phoneOwnerUid.size() <= 128))
           && (!('rosterId' in d) || (d.rosterId is string && d.rosterId.size() <= 80))
           && (!('shortCode' in d) || (d.shortCode is string && d.shortCode.size() == 8))
-          && (!('guestAuto' in d) || d.guestAuto is bool);
+          && (!('guestAuto' in d) || d.guestAuto is bool)
+          && organizerLinkTokenOk(d);
     }
 
     match /players/{playerId} {
@@ -855,6 +870,7 @@ service cloud.firestore {
       // El jugador (quien tiene la ficha) solo puede crear SU alta: pendiente o espera.
       allow create: if signedIn()
           && selfSignupShape(request.resource.data)
+          && playerId == selfSignupId(request.resource.data)
           && holdsRoster(request.resource.data.rosterId)
           && selfRateOk(request.resource.data.rosterId, playerId)
           && validPlayer(request.resource.data)
@@ -864,11 +880,13 @@ service cloud.firestore {
       // Va antes y no llama a validPlayer: si no, el tope de 1000
       // expresiones niega el alta y la pantalla vuelve a «Anotarme».
       allow create: if !signedIn()
+          && playerId == selfSignupId(request.resource.data)
           && guestSignupShape(request.resource.data)
           && guestPlayerFields(request.resource.data)
           && selfRateOk(request.resource.data.rosterId, playerId)
           && playerListsOk(request.resource.data.matchId);
       allow create: if isActiveStaff() && validPlayer(request.resource.data)
+          && organizerLinkTokenOk(request.resource.data)
           && invitedByOk()
           && isAdder(matchData(request.resource.data.matchId))
           && playerListsOk(request.resource.data.matchId);
