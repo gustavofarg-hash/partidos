@@ -43,5 +43,5 @@ test('el recordatorio toma el WhatsApp de la ficha cuando la fila no lo trae', (
 test('la app arma recordatorios y cartel con el número de la ficha', () => {
   const app = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
   assert.match(app, /const everyone = withAgendaPhones\(playersOf\(m\.id\), app\.roster, actor\(\)\);/);
-  assert.match(app, /return playersForOrganizer\(withAgendaPhones\(playersOf\(matchId\), app\.roster, actor\(\)\), app\.who\);/);
+  assert.match(app, /return playersForOrganizer\(withAgendaPhones\(playersOf\(matchId\), app\.roster, actor\(\)\), app\.who, \{ actor: actor\(\), roster: app\.roster \}\);/);
 });

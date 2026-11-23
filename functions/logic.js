@@ -37,9 +37,21 @@ function decideUrlFor(project) {
   return `https://southamerica-east1-${id}.cloudfunctions.net/decideSignup`;
 }
 
+// v239: igual que courtLabel de js/venues.js (acá es CommonJS y no se puede importar).
+function courtLabel(match) {
+  const raw = String(match?.court || '').trim().replace(/\s+/g, ' ');
+  if (!raw) return '';
+  const rest = raw.replace(/^cancha\b/i, '').trim();
+  if (/^cancha\b/i.test(raw)) return rest ? `Cancha ${rest}` : 'Cancha';
+  return `Cancha ${raw}`;
+}
+
 function pushCopy(kind, player, match, project) {
   const name = String(player?.name || '').trim() || 'Un jugador';
-  const place = String(match?.venueName || 'Polideportivo Colegiales').trim() || 'Polideportivo Colegiales';
+  const venue = String(match?.venueName || 'Polideportivo Colegiales').trim() || 'Polideportivo Colegiales';
+  // v239: la cancha va en el aviso, como en el WhatsApp de «se hizo un lugar».
+  const court = courtLabel(match);
+  const place = court ? `${venue} (${court})` : venue;
   const base = appBase(project);
   if (kind === 'confirmado') {
     const day = [weekdayName(match?.date), dayLabel(match?.date)].filter(Boolean).join(' ');

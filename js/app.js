@@ -43,13 +43,14 @@ import { isSelfPending, pendingSelfSignups, selfSignupRows, signupLimitFrom, sig
 import { confirmBannerText, confirmWhatsAppText, unseenConfirmations } from './confirm-notice.js';
 import { iosPushHint, playerPushAvailable, registerOrganizerPush, registerPlayerPush } from './push.js';
 import { bindTap, tapChose } from './tap.js';
+import { SHORTCUT_DOUBLE_MS, shortcutHash, shortcutMatch } from './shortcut.js';
 import { BACKUP_COLLECTIONS, BACKUP_LOADED_OK, COLLECTION_LABELS, backupFilename, backupProgressText, backupSurfaceMessage, clearTrialResume, parseBackup, readTrialResume, resetProgressText, trialBackupResultText, trialResumeId, writeTrialResume } from './backup.js';
 import {
   DEFAULT_VENUE_ID, DEFAULT_VENUE_NAME, VENUES_DENIED_WRITE, capacityFor, cleanCourt, courtLabel, courtMark, defaultVenueId, filterHistoryByVenues, footballLabel, footballPhrase, historyVenueOptions, isVenueDenied, matchCapacity, matchVenueId, perTeamOf, perTeamOptions, venueChoices, venueLabel,
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v238';
+const APP_VERSION = 'f7c-v239';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -1374,6 +1375,29 @@ function placeOf(match) {
 function capOf(match) {
   return matchCapacity(match);
 }
+// v239: el ícono de arriba es un atajo. Un toque: el partido en juego (o el
+// próximo). Dos toques seguidos: los Equipos de ese partido.
+let brandTapTimer = null;
+function brandIconTap() {
+  if (brandTapTimer) {
+    clearTimeout(brandTapTimer);
+    brandTapTimer = null;
+    goShortcut(true);
+    return;
+  }
+  brandTapTimer = setTimeout(() => {
+    brandTapTimer = null;
+    goShortcut(false);
+  }, SHORTCUT_DOUBLE_MS);
+}
+function goShortcut(teams) {
+  const match = shortcutMatch(app.matches, Date.now());
+  if (!match) toast('No hay partidos próximos');
+  if (sheet.open) closeSheet();
+  const hash = shortcutHash(match, teams);
+  if (location.hash !== hash) location.hash = hash;
+}
+
 function knownMatches() {
   const byId = new Map();
   for (const match of [...(app.matches || []), ...(app.history || [])]) {
@@ -1641,11 +1665,11 @@ function renderTeams(id) {
     return true;
   };
   if (!readOnly) {
-    $('#team-board').addEventListener('pointerdown', (e) => {
-      const goal = e.target.closest('[data-goal]');
-      const row = e.target.closest('[data-drag-player]');
-      if (!goal || !row || (e.button && e.button > 0)) return;
-      e.preventDefault();
+    // v239: − y + cuentan solo con un toque. Deslizar el dedo para scrollear
+    // la lista no suma ni resta goles (igual que el tanteador).
+    bindTap($('#team-board'), '[data-goal]', (goal) => {
+      const row = goal.closest('[data-drag-player]');
+      if (!row) return;
       goalTapAt = Date.now();
       queueGoal(row.dataset.dragPlayer, Number(goal.dataset.goal));
     });
@@ -1654,11 +1678,7 @@ function renderTeams(id) {
     if (!readOnly) {
       const row = e.target.closest('[data-drag-player]');
       const goal = e.target.closest('[data-goal]');
-      if (goal && row) {
-        if (Date.now() - goalTapAt < 700) return;
-        queueGoal(row.dataset.dragPlayer, Number(goal.dataset.goal));
-        return;
-      }
+      if (goal && row) return;
       const arco = e.target.closest('[data-arco]');
       if (arco && row) {
         run(app.store.setInGoal(row.dataset.dragPlayer, arco.getAttribute('aria-pressed') !== 'true'));
@@ -2499,7 +2519,7 @@ function confirmPlayerPlace(player, okMsg) {
 const REMINDER_BANNER = 'Faltan 2 horas: mandá los recordatorios';
 
 function myReminderPlayers(matchId) {
-  return playersForOrganizer(withAgendaPhones(playersOf(matchId), app.roster, actor()), app.who);
+  return playersForOrganizer(withAgendaPhones(playersOf(matchId), app.roster, actor()), app.who, { actor: actor(), roster: app.roster });
 }
 
 function reminderBanners(matches) {
@@ -2558,7 +2578,7 @@ async function openReminders(m) {
   }).map((row) => [row.id, row]));
   const hrefFor = (link) => link?.waUrl || '';
   const paint = () => {
-    const visible = showAll ? fresh : playersForOrganizer(fresh, app.who);
+    const visible = showAll ? fresh : playersForOrganizer(fresh, app.who, { actor: actor(), roster: app.roster });
     const prog = reminderProgress(visible);
     const rows = visible.map((p) => {
       const link = linkById.get(p.id);
@@ -2615,7 +2635,7 @@ async function openReminders(m) {
       link.textContent = 'Enviar de nuevo';
       const line = $('#remind-prog');
       if (line) {
-        const nowProg = reminderProgress(showAll ? fresh : playersForOrganizer(fresh, app.who));
+        const nowProg = reminderProgress(showAll ? fresh : playersForOrganizer(fresh, app.who, { actor: actor(), roster: app.roster }));
         line.textContent = `${nowProg.sent} de ${nowProg.total} enviados${showAll ? ' · todos' : ' · los que anotaste'}`;
       }
       run(app.store.markReminderSent(id));
@@ -2700,7 +2720,7 @@ async function reactivateMatch(m) {
 
 async function offerCancelWhatsApp(match) {
   const people = [...playersOf(match.id), ...waitingOf(match.id)];
-  const links = cancelLinks({ match, players: people, venue: placeOf(match) });
+  const links = cancelLinks({ match, players: people, venue: placeOf(match), roster: app.roster });
   if (!links.length) {
     toast(people.some(phoneHidden) ? PRIVATE_WA_TEXT : 'Nadie tiene WhatsApp para avisar la cancelación.');
     return;
@@ -2729,7 +2749,7 @@ async function offerPromotionWhatsApp(player, match) {
   if (!(await askYesNo(`¿Avisarle por WhatsApp a ${player.name} que subió al partido?`))) return;
   const pending = window.open('about:blank', '_blank');
   const confirmUrl = confirmPageUrl({ matchId: match.id, playerId: player.id, token });
-  const text = promotionMessage({ player, match, venue: placeOf(match), confirmUrl });
+  const text = promotionMessage({ player, match, venue: placeOf(match), confirmUrl, roster: app.roster });
   placeWa(pending, waSendUrl({ phone, text }));
 }
 async function copyText(text) {
@@ -8324,8 +8344,9 @@ async function markPaidNoPlay(m, p) {
       await app.store.promoteFromWaiting(top.id);
       await applyAutoCredit(top.id);
       await offerPromotionWhatsApp(top, m);
-    })();
-    run(job, promote ? `${top.name} pasó al partido` : `${shownName(p)} quedó en No jugó pero pagó`);
+    })().then(() => true);
+    run(job, promote ? `${top.name} pasó al partido` : `${shownName(p)} quedó en No jugó pero pagó`)
+      .then((ok) => { if (ok) openNoPlayPayment(m, p.id); });
   };
   if (!needsPromote) {
     closeSheet();
@@ -8333,6 +8354,16 @@ async function markPaidNoPlay(m, p) {
     return;
   }
   askYesNo(`¿Subir a ${top.name}, el primero de la lista de espera?`).then(go);
+}
+
+/**
+ * v239: al pasar a «No jugó pero pagó» se abre Cargar pago para anotar el
+ * efectivo o la transferencia. Si ya figura pagado, no hace falta.
+ */
+function openNoPlayPayment(m, playerId) {
+  const fresh = (app.players || []).find((item) => item.id === playerId);
+  if (!fresh || fresh.paid === true || sheet.open) return;
+  openPaymentForm(m, fresh);
 }
 
 async function restoreNoPlay(m, p) {
@@ -8803,7 +8834,11 @@ async function boot() {
   $('#btn-text-bigger').onclick = () => { stepTextSize(1); syncTextSize(); };
   syncTextSize();
   $('#btn-settings').onclick = () => { if (app.session?.user) openSettings(); };
-  $('#brand').onclick = () => { if (!app.session?.user) return; location.hash = '#/'; };
+  $('#brand').onclick = (e) => {
+    if (!app.session?.user) return;
+    if (e.target.closest?.('img')) { brandIconTap(); return; }
+    location.hash = '#/';
+  };
 
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((reg) => {
