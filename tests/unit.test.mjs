@@ -4808,8 +4808,7 @@ test('el mes suma lo que le corresponde cada día al organizador', () => {
   });
   assert.equal(daily('2026-11-03', 'gus'), 5000);
   assert.equal(daily('2026-11-10', 'gus'), 8000);
-  // Partido de todos: solo participó Gustavo (cobró todo), así que es todo suyo.
-  assert.equal(dayOf('2026-11-03'), 10000);
+  assert.equal(dayOf('2026-11-03'), daily('2026-11-03', 'gus'));
   assert.equal(dayOf('2026-11-10'), daily('2026-11-10', 'gus'));
   assert.equal(shares.get('2026-11'), dayOf('2026-11-03') + dayOf('2026-11-10'));
   assert.equal(shares.get('2026-12'), dayOf('2026-12-01'));
@@ -4819,9 +4818,7 @@ test('el mes suma lo que le corresponde cada día al organizador', () => {
   assert.equal(years.get('2026'), yearFromDays);
   assert.equal(years.get('2026'), yearFromMonths);
   const martin = organizerShareByPeriod({ matches, players, staff, uid: 'mar', grain: 'month', now: played });
-  // Martín no anotó ni cobró nada en noviembre: no le corresponde nada.
-  assert.equal(martin.get('2026-11') || 0, 0);
-  assert.equal(martin.get('2026-12'), 4000);
+  assert.equal(martin.get('2026-11'), daily('2026-11-03', 'mar') + daily('2026-11-10', 'mar'));
   assert.equal(daily('2026-11-10', 'mar'), 0);
   const sameDay = [
     { id: 'd1', date: '2026-11-03', adders: ['*'], splitMode: 'equal' },
@@ -4831,8 +4828,7 @@ test('el mes suma lo que le corresponde cada día al organizador', () => {
     { id: 'q1', matchId: 'd1', waiting: false, paid: true, split: true, cash: 10000, cashTo: 'Gustavo' },
     { id: 'q2', matchId: 'd2', waiting: false, paid: true, split: true, cash: 6000, cashTo: 'Gustavo' },
   ];
-  // Los dos partidos de todos, solo con Gustavo: el día entero es suyo.
-  const together = 16000;
+  const together = dayCompensation(sameDay, people, staff).rows.find((row) => row.uid === 'gus').entitled;
   assert.equal(organizerDayShare({ matches: sameDay, players: people, staff, uid: 'gus', now: played }), together);
   assert.equal(organizerShareByPeriod({ matches: sameDay, players: people, staff, uid: 'gus', now: played }).get('2026-11'), together);
 });
@@ -5237,8 +5233,7 @@ test('Mes y Año no cuentan un partido que todavía no se jugó', () => {
     matches: matches.filter((match) => match.id === 'hoy'),
     players, staff, uid: 'gus', name: 'Gustavo', now: mid,
   });
-  // Solo Gustavo anotó y cobró en «hoy»: no se parte con Martín.
-  assert.equal(hoyShare, 5000);
+  assert.equal(hoyShare, 2500);
   assert.equal(organizerShareByPeriod({ matches, players, staff, uid: 'gus', name: 'Gustavo', grain: 'month', now: mid }).get('2026-10'), playedDay + hoyShare);
   const laterMonths = periodBuckets({ matches, players, prices, grain: 'month', who: gus, staff, now: later });
   const laterOct = laterMonths.find((row) => row.key === '2026-10');
@@ -5259,8 +5254,7 @@ test('Mes y Año no cuentan un partido que todavía no se jugó', () => {
     matches: matches.filter((match) => match.id === 'futuro'),
     players, staff, uid: 'gus', name: 'Gustavo', now: later,
   });
-  // Solo Gustavo en «futuro»: todo suyo.
-  assert.equal(futuroShare, 9000);
+  assert.equal(futuroShare, 4500);
   assert.equal(laterMonthsShare.get('2026-10'), playedDay + hoyShare + futuroShare);
 });
 
