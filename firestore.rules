@@ -681,14 +681,17 @@ service cloud.firestore {
     function ratePath(rosterId) {
       return /databases/$(database)/documents/signupRates/$(rosterId);
     }
+    // v233: una sola lectura con let; repetir get() sumaba expresiones al tope de 1000.
     function selfRateOk(rosterId, pid) {
-      return exists(ratePath(rosterId))
-          && get(ratePath(rosterId)).data.lastId == pid
-          && get(ratePath(rosterId)).data.count is int
-          && get(ratePath(rosterId)).data.count >= 1
-          && get(ratePath(rosterId)).data.count <= signupMaxMoves()
-          && get(ratePath(rosterId)).data.windowStart is timestamp
-          && request.time < get(ratePath(rosterId)).data.windowStart + duration.value(signupWindowMinutes(), 'm');
+      return exists(ratePath(rosterId)) && selfRateDocOk(get(ratePath(rosterId)).data, pid);
+    }
+    function selfRateDocOk(r, pid) {
+      return r.lastId == pid
+          && r.count is int
+          && r.count >= 1
+          && r.count <= signupMaxMoves()
+          && r.windowStart is timestamp
+          && request.time < r.windowStart + duration.value(signupWindowMinutes(), 'm');
     }
     // El id del enlace #/jugador/{id}. No se puede listar el plantel.
     function guestRoster(rosterId) {
@@ -720,10 +723,13 @@ service cloud.firestore {
       return d.addedByUid == ''
           || (d.shareToken is string && d.shareToken.size() >= 20 && d.shareToken.size() <= 80
               && exists(shareTokenPath(d.shareToken))
-              && shareTokenData(d.shareToken).uid == d.addedByUid
-              && d.addedBy == shareTokenData(d.shareToken).name
-              && (matchData(d.matchId).get('createdByUid', '') == d.addedByUid
-                  || (matchData(d.matchId).keys().hasAny(['adders']) && matchData(d.matchId).adders is list && matchData(d.matchId).adders.hasAny([d.addedByUid, '*']))));
+              && guestLinkOwnerOk(d, shareTokenData(d.shareToken), matchData(d.matchId)));
+    }
+    function guestLinkOwnerOk(d, t, m) {
+      return t.uid == d.addedByUid
+          && d.addedBy == t.name
+          && (m.get('createdByUid', '') == d.addedByUid
+              || (m.get('adders', null) is list && m.adders.hasAny([d.addedByUid, '*'])));
     }
     function guestSignupShape(d) {
       return d.selfSignup == true
@@ -748,7 +754,10 @@ service cloud.firestore {
     // niega el alta aunque los datos estén bien. La lista de claves corta
     // plata, goles y confirmación sin recorrer cada campo opcional.
     function guestPlayerFields(d) {
-      return d.keys().hasAll(['matchId', 'matchDate', 'name', 'rosterId', 'selfSignup', 'waiting', 'waitOrder', 'tentative', 'tentativeAt', 'rosterAt', 'addedByUid', 'addedBy', 'shareToken', 'createdAt', 'updatedAt', 'phone', 'hasPhone', 'phoneKey', 'phoneOwnerUid', 'phoneShared', 'confirmToken', 'viewers', 'adders'])
+      // v233: hasAll solo con lo que no se lee más abajo. El resto se lee campo por
+      // campo y, si falta, la regla da error y niega igual. Cada nombre de la lista
+      // cuenta para el tope de 1000 y la guardia de teléfono necesitaba ese lugar.
+      return d.keys().hasAll(['tentative'])
           && d.keys().hasOnly(['matchId', 'matchDate', 'name', 'rosterId', 'selfSignup', 'waiting', 'waitOrder', 'tentative', 'tentativeAt', 'rosterAt', 'addedByUid', 'addedBy', 'shareToken', 'createdAt', 'updatedAt', 'phone', 'hasPhone', 'phoneKey', 'phoneOwnerUid', 'phoneShared', 'confirmToken', 'viewers', 'adders', 'signedUpWith', 'signedUpWithName'])
           && d.matchId is string && d.matchId.size() > 0 && d.matchId.size() <= 80
           && d.matchDate is string && d.matchDate.size() == 10
@@ -823,6 +832,70 @@ service cloud.firestore {
               && (d.shareToken == matchData(d.matchId).get('playerKey', '')
                   || (exists(shareTokenPath(d.shareToken)) && shareTokenData(d.shareToken).uid == request.auth.uid)));
     }
+    // v233: un teléfono, una persona por partido. phoneGuards/{partido}__{huella}
+    // apunta al jugador que tiene ese número ahí. La huella es la del jugador o,
+    // si no tiene (el alta del enlace), la de su ficha.
+    function rosterPhoneKey(rid) {
+      return (rid is string && rid.size() > 0 && rid.size() <= 80 && rid.matches('^[A-Za-z0-9]+$')
+          && exists(/databases/$(database)/documents/roster/$(rid)))
+          ? rosterDoc(rid).get('phoneKey', '') : '';
+    }
+    function phoneIdOf(d) {
+      let own = d.get('phoneKey', '');
+      return (own is string && own.size() == 64) ? own : rosterPhoneKey(d.get('rosterId', ''));
+    }
+    function isPhoneId(k) {
+      return k is string && k.size() == 64 && k.matches('^[0-9a-f]{64}$');
+    }
+    function guardPath(matchId, k) {
+      return /databases/$(database)/documents/phoneGuards/$(matchId + '__' + k);
+    }
+    // El alta con teléfono trae su guardia en el mismo lote, apuntando a este jugador.
+    function phoneGuardWritten(d, pid) {
+      let k = phoneIdOf(d);
+      return !isPhoneId(k)
+          || (existsAfter(guardPath(d.matchId, k)) && getAfter(guardPath(d.matchId, k)).data.playerId == pid);
+    }
+    // El alta del enlace no trae teléfono (guestPlayerFields): la huella es la de la
+    // ficha, que guestRoster ya leyó. Versión corta: la regla del enlace está
+    // cerca del tope de 1000 expresiones.
+    function guestGuardWritten(d, pid) {
+      let k = rosterDoc(d.rosterId).get('phoneKey', '');
+      return !(k is string && k.size() == 64)
+          || getAfter(guardPath(d.matchId, k)).data.playerId == pid;
+    }
+    // Cambio de número: si la huella propia cambia a otra, la guardia nueva va en el lote.
+    function phoneGuardMoved(pid) {
+      let k = request.resource.data.get('phoneKey', '');
+      return k == resource.data.get('phoneKey', '') || !isPhoneId(k)
+          || (existsAfter(guardPath(request.resource.data.matchId, k)) && getAfter(guardPath(request.resource.data.matchId, k)).data.playerId == pid);
+    }
+    function guardPlayerPath(pid) {
+      return /databases/$(database)/documents/players/$(pid);
+    }
+    // La guardia vale si su jugador, después del lote, sigue en ese partido con ese número.
+    function guardLiveAfter(g) {
+      return existsAfter(guardPlayerPath(g.playerId))
+          && getAfter(guardPlayerPath(g.playerId)).data.matchId == g.matchId
+          && phoneIdOf(getAfter(guardPlayerPath(g.playerId)).data) == g.phoneKey;
+    }
+    function guardLiveNow(g) {
+      return exists(guardPlayerPath(g.playerId))
+          && get(guardPlayerPath(g.playerId)).data.matchId == g.matchId
+          && phoneIdOf(get(guardPlayerPath(g.playerId)).data) == g.phoneKey;
+    }
+    function guardShape(g, guardId) {
+      return g.keys().hasOnly(['matchId', 'phoneKey', 'playerId', 'name', 'addedBy', 'createdAt'])
+          && g.keys().hasAll(['matchId', 'phoneKey', 'playerId'])
+          && g.matchId is string && g.matchId.size() > 0 && g.matchId.size() <= 80
+          && isPhoneId(g.phoneKey)
+          && guardId == g.matchId + '__' + g.phoneKey
+          && g.playerId is string && g.playerId.matches('^[A-Za-z0-9_-]{1,160}$')
+          && g.get('name', '') is string && g.get('name', '').size() <= 60
+          && g.get('addedBy', '') is string && g.get('addedBy', '').size() <= 40
+          && (!('createdAt' in g) || g.createdAt is number);
+    }
+
     function organizerSlotShape(d) {
       return d.keys().hasAll(['matchId', 'matchDate', 'name', 'addedBy', 'addedByUid', 'createdAt', 'updatedAt', 'viewers', 'adders'])
           && d.keys().hasOnly(['matchId', 'matchDate', 'name', 'phone', 'addedBy', 'addedByUid', 'createdAt', 'updatedAt', 'waiting', 'waitOrder', 'rosterAt', 'confirmToken', 'hasPhone', 'phoneKey', 'phoneOwnerUid', 'phoneShared', 'viewers', 'adders', 'rosterId', 'signedUpWith', 'signedUpWithName', 'shortName', 'tentative', 'tentativeAt', 'selfSignup', 'invitedBy', 'invitedByName', 'guestAuto', 'shortCode', 'shareToken'])
@@ -872,7 +945,8 @@ service cloud.firestore {
           && organizerSlotShape(request.resource.data)
           && invitedByOk()
           && isAdder(matchData(request.resource.data.matchId))
-          && playerListsOk(request.resource.data.matchId);
+          && playerListsOk(request.resource.data.matchId)
+          && phoneGuardWritten(request.resource.data, playerId);
       // El jugador (quien tiene la ficha) solo puede crear SU alta: pendiente o espera.
       allow create: if signedIn()
           && selfSignupShape(request.resource.data)
@@ -881,7 +955,8 @@ service cloud.firestore {
           && selfRateOk(request.resource.data.rosterId, playerId)
           && validPlayer(request.resource.data)
           && invitedByOk()
-          && playerListsOk(request.resource.data.matchId);
+          && playerListsOk(request.resource.data.matchId)
+          && phoneGuardWritten(request.resource.data, playerId);
       // El enlace #/jugador/{id}, sin cuenta de organizador.
       // Va antes y no llama a validPlayer: si no, el tope de 1000
       // expresiones niega el alta y la pantalla vuelve a «Anotarme».
@@ -890,12 +965,14 @@ service cloud.firestore {
           && guestSignupShape(request.resource.data)
           && guestPlayerFields(request.resource.data)
           && selfRateOk(request.resource.data.rosterId, playerId)
-          && playerListsOk(request.resource.data.matchId);
+          && playerListsOk(request.resource.data.matchId)
+          && guestGuardWritten(request.resource.data, playerId);
       allow create: if isActiveStaff() && validPlayer(request.resource.data)
           && organizerLinkTokenOk(request.resource.data)
           && invitedByOk()
           && isAdder(matchData(request.resource.data.matchId))
-          && playerListsOk(request.resource.data.matchId);
+          && playerListsOk(request.resource.data.matchId)
+          && phoneGuardWritten(request.resource.data, playerId);
       // Solo el pago (Guardar pago, pago dividido, promo, cobrar transferencia).
       // Va primero y es corta: nombre, teléfono, invitado, respuesta y acceso
       // no cambian, así que no hace falta revisarlos. Firestore corta en la
@@ -914,6 +991,7 @@ service cloud.firestore {
           && phoneGone(request.resource.data)
           && validMoney(request.resource.data);
       allow update: if isActiveStaff() && validPlayerUpdate() && invitedByOk() && confirmationWriteOk()
+          && phoneGuardMoved(playerId)
           && playerStampSame()
           && (playerNameSame() || isPlayerCreator())
           && (playerPhoneMetaSame() || isPlayerCreator() || legacyPhoneMoveOk())
@@ -938,6 +1016,27 @@ service cloud.firestore {
           );
       allow delete: if isAdmin()
           || (isActiveStaff() && (!('adders' in resource.data) || (resource.data.adders is list && resource.data.adders.hasAny([request.auth.uid, '*']))));
+    }
+
+    // v233: guardia de teléfono por partido. Sin cuenta no se lee ni se lista.
+    // Se crea con su jugador en el mismo lote; no se pisa la de otro jugador que
+    // sigue anotado con ese número; se borra cuando ya no apunta a nadie vivo.
+    match /phoneGuards/{guardId} {
+      allow get: if isActiveStaff();
+      allow list: if false;
+      allow create: if guardShape(request.resource.data, guardId) && guardLiveAfter(request.resource.data);
+      allow update: if guardShape(request.resource.data, guardId) && guardLiveAfter(request.resource.data)
+          && (resource.data.playerId == request.resource.data.playerId || !guardLiveAfter(resource.data));
+      allow delete: if resource == null || !guardLiveAfter(resource.data);
+    }
+    // El jugador pregunta si el número de SU ficha ya está en el partido, sin ver
+    // la guardia: el get de este documento (que no existe) anda si está libre.
+    match /phoneChecks/{matchId}/rosters/{rosterId} {
+      allow get: if (guestRoster(rosterId) || holdsRoster(rosterId))
+          && (!isPhoneId(rosterPhoneKey(rosterId))
+              || !exists(guardPath(matchId, rosterPhoneKey(rosterId)))
+              || !guardLiveNow(get(guardPath(matchId, rosterPhoneKey(rosterId))).data));
+      allow list, write: if false;
     }
 
     match /organizerTokens/{tokenId} {

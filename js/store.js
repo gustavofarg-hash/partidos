@@ -102,7 +102,8 @@ import { bumpGoals, bumpScore, dropPlayer, nextInGoalAt, scoreRecord, teamsRecor
 import { confirmationIdentity, confirmationRecord, newConfirmToken, overlayConfirmations, upcomingConfirmSlots } from './reminders.js';
 import { isShortCode, newShortCode } from './short.js';
 import { acceptedExternalShort } from './shorten.js';
-import { ALREADY_IN_MATCH, ALREADY_SIGNED_UP, alreadyInMatch, duplicateText, selfAlreadyInMatch, selfSignupPlayerId, inviteBlock, isAutoGuestName, sameDayPromoGuestEditPatches, sameDayPromoGuestNickPatches } from './guests.js';
+import { ALREADY_IN_MATCH, ALREADY_SIGNED_UP, alreadyInMatch, duplicateText, phoneTakenText, selfAlreadyInMatch, selfSignupPlayerId, inviteBlock, isAutoGuestName, sameDayPromoGuestEditPatches, sameDayPromoGuestNickPatches } from './guests.js';
+import { GUARD_COLLECTION, guardKeyFor, guardMoves, newPlayerDocId, permissionDenied, phoneGuardDoc, phoneGuardId } from './phone-guard.js';
 import { EVERYONE, accessPatch, canAdd, canView, playerAccess } from './access.js';
 import { ROSTER_DENIED_READ, SUSPENDED_TEXT, blockingSuspensions, capitalizeWords, cleanShortName, cleanSuspensionHistory, cleanSuspensionNote, isRosterDenied, legacyNoteOwnerUid, liftedSuspensionEvent, personKey, phoneIdentity, rosterHeldBy, rosterHolderIds, rosterIdForSuspension, rosterNoteDocId, rosterPhoneAction, suspensionDocId, withHolder } from './roster.js';
 import { PRIVATE_WA_TEXT, attachPhone, canonicalWa, phoneKey } from './privacy.js';
@@ -2208,7 +2209,7 @@ export class FirebaseStore {
     const order = [
       'links', 'log', 'compensations', 'credits', 'confirmations',
       'rosterNotes', 'rosterClaims', 'rosterRedirects', 'rosterSuspensions', 'suspensionHistory', 'payBatches', 'behavior',
-      'playerContacts', 'rosterContacts', 'players', 'roster', 'organizers',
+      'playerContacts', 'rosterContacts', 'phoneGuards', 'players', 'roster', 'organizers',
       'settings', 'venues', 'matches',
     ];
     reportBackupProgress(onProgress, 0, 0);
@@ -3918,10 +3919,19 @@ export class FirebaseStore {
       ...(selfHold || opts.selfSignup === true ? { selfSignup: true } : {}),
       ...(linkToken ? { shareToken: linkToken } : {}),
     };
-    const ref = opts.id
-      ? doc(this.db, 'players', opts.id)
-      : await addDoc(collection(this.db, 'players'), player);
-    if (opts.id) await setDoc(ref, player);
+    // v233: con teléfono, el jugador y su guardia van en el mismo lote.
+    const guardKey = guardKeyFor(player, this._rosterPhoneKey(rosterId));
+    let ref;
+    if (guardKey) {
+      const newId = opts.id || newPlayerDocId();
+      ref = { id: newId };
+      await this._createPlayerWithGuard(doc(this.db, 'players', newId), newId, player, guardKey, { self: selfRow, rosterId });
+    } else {
+      ref = opts.id
+        ? doc(this.db, 'players', opts.id)
+        : await addDoc(collection(this.db, 'players'), player);
+      if (opts.id) await setDoc(ref, player);
+    }
     const stored = this.state.matches.find((item) => item.id === match.id) || match;
     await updateDoc(doc(this.db, 'matches', match.id), { ...countPatch(this.fs, stored, 1, mates.length), updatedAt: now });
     if (canon) {
@@ -3943,6 +3953,99 @@ export class FirebaseStore {
       detail: selfSignupDetail(player, waiting),
     })]);
     return ref.id;
+  }
+  /** Huella de la ficha (la ve el organizador y, en su enlace, el jugador). */
+  _rosterPhoneKey(rosterId) {
+    const id = String(rosterId || '').trim();
+    if (!id) return '';
+    const row = (this.state.roster || []).find((item) => item?.id === id);
+    return String(row?.phoneKey || '');
+  }
+  /**
+   * La guardia de ese número en ese partido es de otro jugador que sigue anotado.
+   * Solo organizadores (la guardia no se lee sin cuenta). Devuelve { name, addedBy } o null.
+   */
+  async _guardConflict(matchId, key, selfId) {
+    const gid = phoneGuardId(matchId, key);
+    if (!gid) return null;
+    const { doc, getDoc } = this.fs;
+    let guard = null;
+    try {
+      const snap = await getDoc(doc(this.db, GUARD_COLLECTION, gid));
+      guard = snap.exists() ? snap.data() : null;
+    } catch (error) {
+      if (permissionDenied(error)) return null;
+      throw error;
+    }
+    const other = String(guard?.playerId || '');
+    if (!other || other === selfId) return null;
+    const live = (row) => row && row.matchId === matchId && guardKeyFor(row, this._rosterPhoneKey(row.rosterId)) === key;
+    const known = (this.state.players || []).find((row) => row.id === other);
+    if (known) return live(known) ? { name: known.name || guard.name || '', addedBy: known.signedUpWithName || known.addedBy || guard.addedBy || '' } : null;
+    try {
+      const snap = await getDoc(doc(this.db, 'players', other));
+      if (!snap.exists()) return null;
+      const row = { id: other, ...snap.data() };
+      return live(row) ? { name: row.name || guard.name || '', addedBy: row.signedUpWithName || row.addedBy || guard.addedBy || '' } : null;
+    } catch (error) {
+      if (!permissionDenied(error)) throw error;
+      // No lo vemos (un «solo yo» ajeno): la guardia manda.
+      return { name: guard.name || '', addedBy: guard.addedBy || '' };
+    }
+  }
+  /** Sin cuenta: ¿el número de esta ficha ya está en el partido? Las reglas contestan sin mostrar la guardia. */
+  async _selfPhoneTaken(matchId, rosterId) {
+    const { doc, getDoc } = this.fs;
+    try {
+      await getDoc(doc(this.db, 'phoneChecks', matchId, 'rosters', rosterId));
+      return false;
+    } catch (error) {
+      if (permissionDenied(error)) return true;
+      return false;
+    }
+  }
+  async _explainGuardDenied(matchId, key, playerId, { self = false, rosterId = '' } = {}) {
+    if (self) {
+      if (rosterId && await this._selfPhoneTaken(matchId, rosterId)) {
+        return Object.assign(new Error(ALREADY_SIGNED_UP), { code: 'already-in-match' });
+      }
+      return null;
+    }
+    const hit = await this._guardConflict(matchId, key, playerId);
+    return hit ? Object.assign(new Error(phoneTakenText(hit.name, hit.addedBy)), { code: 'already-in-match' }) : null;
+  }
+  /**
+   * Alta con guardia: un lote con el jugador y phoneGuards/{partido}__{huella}.
+   * El admin escribe sin reglas (la regla general del admin): mira la guardia antes.
+   */
+  async _createPlayerWithGuard(ref, playerId, player, key, { self = false, rosterId = '' } = {}) {
+    const { doc, writeBatch } = this.fs;
+    const gid = phoneGuardId(player.matchId, key);
+    if (this.actor?.role === 'admin') {
+      const hit = await this._guardConflict(player.matchId, key, playerId);
+      if (hit) {
+        throw Object.assign(new Error(self ? ALREADY_SIGNED_UP : phoneTakenText(hit.name, hit.addedBy)), { code: 'already-in-match' });
+      }
+    }
+    const batch = writeBatch(this.db);
+    batch.set(ref, player);
+    batch.set(doc(this.db, GUARD_COLLECTION, gid), phoneGuardDoc(playerId, player, key));
+    try {
+      await batch.commit();
+    } catch (error) {
+      if (!permissionDenied(error)) throw error;
+      throw (await this._explainGuardDenied(player.matchId, key, playerId, { self, rosterId })) || error;
+    }
+  }
+  /** Borra al jugador; la guardia sale en el mismo lote. Si la guardia es de otro (alta vieja), se reintenta sin ella. */
+  async _deleteWithGuard(build, player) {
+    const gid = player ? phoneGuardId(player.matchId, guardKeyFor(player, this._rosterPhoneKey(player.rosterId))) : '';
+    try {
+      await build(gid);
+    } catch (error) {
+      if (!gid || !permissionDenied(error)) throw error;
+      await build('');
+    }
   }
   async loadSignupLimit() {
     if (this._signupLimit) return this._signupLimit;
@@ -4149,7 +4252,10 @@ export class FirebaseStore {
       adders: access.adders,
     };
     const { doc, setDoc } = this.fs;
-    await setDoc(doc(this.db, 'players', id), player);
+    // v233: el número de la ficha no puede estar dos veces en el partido.
+    const guardKey = guardKeyFor(player, String(person?.phoneKey || '') || this._rosterPhoneKey(rosterId));
+    if (guardKey) await this._createPlayerWithGuard(doc(this.db, 'players', id), id, player, guardKey, { self: true, rosterId });
+    else await setDoc(doc(this.db, 'players', id), player);
     this.state.players = [...this.state.players.filter((row) => row.id !== id), { id, ...player }];
     this._emit();
     try {
@@ -4175,8 +4281,14 @@ export class FirebaseStore {
       throw Object.assign(new Error('Avisale al organizador para bajarte.'), { code: 'too-late' });
     }
     await this._chargeSignupRate(player.rosterId || playerId, playerId);
-    const { doc, deleteDoc } = this.fs;
-    await deleteDoc(doc(this.db, 'players', playerId));
+    const { doc, deleteDoc, writeBatch } = this.fs;
+    await this._deleteWithGuard(async (gid) => {
+      if (!gid) return deleteDoc(doc(this.db, 'players', playerId));
+      const batch = writeBatch(this.db);
+      batch.delete(doc(this.db, 'players', playerId));
+      batch.delete(doc(this.db, GUARD_COLLECTION, gid));
+      return batch.commit();
+    }, player);
     this.state.players = this.state.players.filter((row) => row.id !== playerId);
     this._emit();
     try {
@@ -4337,6 +4449,15 @@ export class FirebaseStore {
     applySignupPatch(rest);
     if (typeof rest.name === 'string') rest.name = cleanPersonName(rest.name);
     const patch = { ...rest, updatedAt: Date.now() };
+    const rosterKey = this._rosterPhoneKey(cur.rosterId);
+    if (cur.id && 'phone' in (data || {})) {
+      // v233: antes de escribir el contacto, que el número nuevo no sea de otro anotado.
+      const nextKey = phoneKey(canonicalWa(phone || ''));
+      if (nextKey && nextKey !== guardKeyFor(cur, rosterKey)) {
+        const hit = await this._guardConflict(cur.matchId, nextKey, id);
+        if (hit) throw Object.assign(new Error(phoneTakenText(hit.name, hit.addedBy)), { code: 'already-in-match' });
+      }
+    }
     if ('phone' in (data || {})) {
       try {
         const contactOpts = typeof data.phoneShared === 'boolean' ? { visibleToAll: data.phoneShared } : {};
@@ -4375,14 +4496,41 @@ export class FirebaseStore {
     }
     const match = this.state.matches.find((item) => item.id === cur?.matchId);
     const nextTeams = (data?.waiting === true || data?.noPlay === true) && cur?.id ? dropPlayer(match?.teams, cur.id) : { changed: false };
-    if (nextTeams.changed) {
-      const batch = writeBatch(this.db);
-      batch.update(doc(this.db, 'players', id), patch);
-      batch.update(doc(this.db, 'matches', cur.matchId), { teams: nextTeams.teams, updatedAt: patch.updatedAt });
-      await batch.commit();
+    // v233: si cambia la huella, la guardia se muda en el mismo lote.
+    const moves = cur.id && typeof patch.phoneKey === 'string' && patch.phoneKey !== String(cur.phoneKey || '')
+      ? guardMoves(id, cur, { ...cur, ...rest, phoneKey: patch.phoneKey }, rosterKey)
+      : { set: null, drop: '' };
+    if (nextTeams.changed || moves.set || moves.drop) {
+      const write = async (dropOld) => {
+        const batch = writeBatch(this.db);
+        batch.update(doc(this.db, 'players', id), patch);
+        if (nextTeams.changed) batch.update(doc(this.db, 'matches', cur.matchId), { teams: nextTeams.teams, updatedAt: patch.updatedAt });
+        if (moves.set) batch.set(doc(this.db, GUARD_COLLECTION, moves.set.id), moves.set.data);
+        if (dropOld && moves.drop) batch.delete(doc(this.db, GUARD_COLLECTION, moves.drop));
+        await batch.commit();
+      };
+      try {
+        await write(true);
+      } catch (error) {
+        if (!permissionDenied(error)) throw error;
+        if (moves.drop) {
+          // La guardia vieja era de otro jugador (alta de antes de v233): se deja.
+          try { await write(false); return await this._afterPlayerUpdate(id, data, cur, rest, sync, oldKey, patch, match); }
+          catch (again) { if (!permissionDenied(again) || !moves.set) throw again; }
+        }
+        if (moves.set) {
+          const explained = await this._explainGuardDenied(cur.matchId, moves.set.data.phoneKey, id);
+          if (explained) throw explained;
+        }
+        throw error;
+      }
     } else {
       await updateDoc(doc(this.db, 'players', id), patch);
     }
+    return this._afterPlayerUpdate(id, data, cur, rest, sync, oldKey, patch, match);
+  }
+  async _afterPlayerUpdate(id, data, cur, rest, sync, oldKey, patch, match) {
+    const { doc, updateDoc } = this.fs;
     for (const item of sync) {
       await updateDoc(doc(this.db, 'players', item.id), { ...item.patch, updatedAt: patch.updatedAt });
     }
@@ -4697,14 +4845,15 @@ export class FirebaseStore {
     const nextTeams = dropPlayer(match?.teams, id);
     const localCount = this.state.players.filter((item) => item.matchId === player?.matchId).length;
     const dropLink = isShortCode(player?.shortCode);
-    const commit = async (withLink) => {
+    const commit = async (withLink) => this._deleteWithGuard(async (gid) => {
       const batch = writeBatch(this.db);
       batch.delete(doc(this.db, 'players', id));
       if (player?.confirmToken) batch.delete(doc(this.db, 'confirmations', player.confirmToken));
       if (withLink) batch.delete(doc(this.db, 'links', player.shortCode));
       if (this._contactsLive) batch.delete(doc(this.db, 'playerContacts', id));
+      if (gid) batch.delete(doc(this.db, GUARD_COLLECTION, gid));
       await batch.commit();
-    };
+    }, player);
     try {
       await commit(dropLink);
       if (dropLink) this._linksLive = true;
