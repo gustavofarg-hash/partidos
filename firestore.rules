@@ -860,7 +860,13 @@ service cloud.firestore {
       allow get: if isActiveStaff() && canReadListed(resource.data);
       allow get: if resource.data.viewers.hasAny(['*']);
       allow list: if isActiveStaff() && resource.data.viewers.hasAny([request.auth.uid, '*']);
-      allow list: if resource.data.viewers.hasAny(['*']);
+      // v232: sin sesión (o sin ser organizador activo) solo se listan las filas de UNA ficha:
+      // la consulta tiene que fijar rosterId con == (o in). Así la página del jugador ve lo suyo
+      // y nadie vuelca los anotados ajenos con teléfono, token de confirmación ni pagos.
+      allow list: if resource.data.viewers.hasAny(['*'])
+          && resource.data.rosterId is string
+          && resource.data.rosterId.size() >= 16
+          && resource.data.rosterId.size() <= 80;
       allow list: if guestSignupListed();
       allow create: if isActiveStaff()
           && organizerSlotShape(request.resource.data)
