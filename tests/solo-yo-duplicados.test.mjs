@@ -21,7 +21,6 @@ function organizerStore({ ownToken = OWN } = {}) {
   let ensured = 0;
   store.ensureShareToken = async () => { ensured += 1; return ownToken; };
   store._writeConfirmation = async () => {};
-  store.ensureShortLink = async () => {};
   store._appendLogs = async () => {};
   store._chargeSignupRate = async () => {};
   store._writeSignupPing = async () => {};

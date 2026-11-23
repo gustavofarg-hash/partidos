@@ -247,7 +247,6 @@ test('v233: el enlace y el organizador ven el mensaje de siempre (FirebaseStore 
       store._appendLogs = async () => {};
       store._writeSignupPing = async () => {};
       store._writeConfirmation = async () => {};
-      store.ensureShortLink = async () => {};
       store._emit = () => {};
       store.state.matches = [match];
       store.state.venues = [];

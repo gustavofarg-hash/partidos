@@ -44,7 +44,6 @@ import {
   reservationClearedByAnswer, waReminderUrl, withinReminderWindow,
 } from '../js/reminders.js';
 import { confirmTarget, isShortCode, newShortCode, shortConfirmUrl } from '../js/short.js';
-import { acceptedExternalShort, shortenExternal } from '../js/shorten.js';
 import { TEXT_SIZE_DEFAULT, TEXT_SIZES, indexFromStored, readTextSize, stepTextSize, textSizeIndex } from '../js/text-size.js';
 import { addedCount, buildAccess, canAdd, canDelete, canEditAccess, canView, compensationApplies, importAccess, isRestricted, limitFor, limitMessage, matchStaff, payeeNames, publicAccess, signupForMatch, signupOptions } from '../js/access.js';
 import { balanceTeams, bumpGoals, bumpScore, cyclePlayer, dropPlayer, dropPlayerOn, goaliesLeft, movePlayer, nextInGoalAt, normalizeScore, normalizeTeams, orderByGoal, orderTeamsByGoal, scoreLine, shuffleTeams, teamsBalance, teamsMessage, teamsRecord } from '../js/teams.js';
@@ -1041,84 +1040,6 @@ test('14 confirmados se ven igual aunque la hora llegue como Timestamp', () => {
   assert.equal(merged.filter((player) => player.waiting === true).length, 0);
 });
 
-test('acortar: spoo.me, da.gd, basura y tiempo', async () => {
-  const longUrl = 'https://gustavofarg-hash.github.io/futbol-colegiales/c/?k=Ab3x9Zk2';
-  const spooOnly = async (url, init) => {
-    assert.equal(String(url), 'https://spoo.me/api/v1/shorten');
-    assert.equal(init.method, 'POST');
-    assert.equal(init.headers['Content-Type'], 'application/json');
-    assert.deepEqual(JSON.parse(init.body), { long_url: longUrl });
-    return { json: async () => ({ short_url: 'https://spoo.me/ZXwB0uF' }), text: async () => '' };
-  };
-  assert.deepEqual(await shortenExternal(longUrl, { fetchImpl: spooOnly, timeoutMs: 40 }), {
-    shortUrl: 'https://spoo.me/ZXwB0uF', shortProvider: 'spoo',
-  });
-
-  const garbageThenDagd = async (url) => {
-    if (String(url).includes('spoo.me')) {
-      return { status: 201, json: async () => ({ short_url: 'https://evil.example/phish' }), text: async () => '' };
-    }
-    assert.match(String(url), /^https:\/\/da\.gd\/s\?url=/);
-    return { status: 200, json: async () => ({}), text: async () => 'https://da.gd/jjXrP\n' };
-  };
-  assert.deepEqual(await shortenExternal(longUrl, { fetchImpl: garbageThenDagd, timeoutMs: 40 }), {
-    shortUrl: 'https://da.gd/jjXrP', shortProvider: 'dagd',
-  });
-
-  const bothBad = async (url) => {
-    if (String(url).includes('spoo.me')) return { json: async () => ({ short_url: 'http://spoo.me/Abc' }), text: async () => '' };
-    return { json: async () => ({}), text: async () => 'hola no es un link' };
-  };
-  assert.equal(await shortenExternal(longUrl, { fetchImpl: bothBad, timeoutMs: 40 }), null);
-
-  const timeoutThenDagd = async (url, init) => {
-    if (String(url).includes('spoo.me')) {
-      await new Promise((resolve, reject) => {
-        const timer = setTimeout(resolve, 500);
-        init.signal.addEventListener('abort', () => {
-          clearTimeout(timer);
-          reject(new DOMException('Aborted', 'AbortError'));
-        });
-      });
-    }
-    return { text: async () => 'https://da.gd/jjXrP', json: async () => ({}) };
-  };
-  const timed = await shortenExternal(longUrl, { fetchImpl: timeoutThenDagd, timeoutMs: 30 });
-  assert.equal(timed.shortProvider, 'dagd');
-  assert.equal(timed.shortUrl, 'https://da.gd/jjXrP');
-  assert.equal(acceptedExternalShort({ shortUrl: 'https://spoo.me/ZXwB0uF', shortProvider: 'dagd' }), null);
-  assert.equal(acceptedExternalShort({ shortUrl: 'https://spoo.me/ZXwB0uF/extra', shortProvider: 'spoo' }), null);
-  assert.deepEqual(acceptedExternalShort({ shortUrl: 'https://da.gd/jjXrP', shortProvider: 'dagd' }), {
-    shortUrl: 'https://da.gd/jjXrP', shortProvider: 'dagd',
-  });
-});
-
-test('el acortador queda en el link y sobrevive a un guardado', async () => {
-  const mem = new Map();
-  globalThis.localStorage = {
-    getItem: (k) => (mem.has(k) ? mem.get(k) : null),
-    setItem: (k, v) => mem.set(k, String(v)),
-    removeItem: (k) => mem.delete(k),
-  };
-  const store = createDemoStore();
-  const mid = await store.addMatch({ date: '2026-10-23', time: '18:00', note: 'Acortar' }, 'Gustavo');
-  const pid = await store.addPlayer({ id: mid, date: '2026-10-23' }, { name: 'Corto Uno', phone: '5491199990001' }, 'Gustavo');
-  await store.ensureConfirmToken(pid);
-  const code = await store.ensureShortLink(pid);
-  assert.equal(isShortCode(code), true);
-  assert.equal(await store.readExternalShort(code), null);
-  await store.saveExternalShort(code, { shortUrl: 'https://evil.example/x', shortProvider: 'spoo' });
-  assert.equal(await store.readExternalShort(code), null);
-  await store.saveExternalShort(code, { shortUrl: 'https://spoo.me/ZXwB0uF', shortProvider: 'spoo' });
-  const saved = await store.readExternalShort(code);
-  assert.equal(saved.shortUrl, 'https://spoo.me/ZXwB0uF');
-  assert.equal(saved.shortProvider, 'spoo');
-  assert.equal(typeof saved.shortAt, 'number');
-  await store.updateMatch(mid, { note: 'otra' }, 'Gustavo');
-  assert.equal((await store.readExternalShort(code)).shortUrl, 'https://spoo.me/ZXwB0uF');
-  assert.equal(shortConfirmUrl(code).includes(`/c/?k=${code}`), true);
-});
-
 test('link corto: código, url y el mismo destino', () => {
   const code = newShortCode();
   assert.equal(code.length, 8);
@@ -1228,7 +1149,7 @@ test('la confirmación de asistencia usa HOY al cruzar la medianoche', () => {
   const stale = [...slots, ...tomorrowSlots, { token: 'token-jue-largo-0003', playerId: 'jue', date: '2026-10-22', time: '19:00' }];
   assert.deepEqual(visibleConfirmSlots(stale, before, '2026-10-19').map((slot) => slot.date), ['2026-10-19', '2026-10-19']);
   assert.equal(visibleConfirmSlots(slots, new Date('2026-11-15T13:00:00-03:00')).length, 0);
-  const manyUrl = 'https://spoo.me/XXXX';
+  const manyUrl = 'https://gustavofarg-hash.github.io/futbol-colegiales/confirmar.html?m=m1&p=hoy&t=token-hoy-largo-0001';
   const luciano = { name: 'Luciano Pérez' };
   assert.equal(confirmScheduleText([
     { date: '2026-10-19', time: '18:30' },
@@ -1249,10 +1170,6 @@ test('la confirmación de asistencia usa HOY al cruzar la medianoche', () => {
   assert.equal(attendanceMessage({
     player: luciano, when: 'Mañana', time: '18:00', confirmUrl: manyUrl,
   }), `¡Hola Luciano! ¿Confirmás que jugás Mañana 18:00?\n\nRespondé en este link: ${manyUrl}`);
-  const house = 'https://gustavofarg-hash.github.io/futbol-colegiales/c/?k=Ab3x9Zk2';
-  const swapped = named.split(house).join('https://spoo.me/ZXwB0uF');
-  assert.equal(swapped.endsWith('https://spoo.me/ZXwB0uF'), true);
-  assert.equal(swapped.includes(house), false);
 });
 
 test('aviso al subir de la espera y lugar reservado', () => {
@@ -1353,9 +1270,10 @@ test('recordatorio: ventana de 2 horas y links sin abrir el flujo', () => {
     players: [{ ...players[0], shortCode: short }],
     venue: 'Polideportivo Colegiales',
   });
-  assert.equal(shortLinks[0].confirmUrl, `https://gustavofarg-hash.github.io/futbol-colegiales/c/?k=${short}`);
-  assert.equal(decodeURIComponent(shortLinks[0].waUrl).includes(token), false);
-  assert.equal(decodeURIComponent(shortLinks[0].waUrl).includes(`/c/?k=${short}`), true);
+  // v235: aunque el jugador tenga un link corto viejo, el mensaje lleva el link completo.
+  assert.equal(shortLinks[0].confirmUrl, `https://gustavofarg-hash.github.io/futbol-colegiales/confirmar.html?m=2026-10-19_1500&p=p1&t=${token}`);
+  assert.equal(decodeURIComponent(shortLinks[0].waUrl).includes(token), true);
+  assert.equal(decodeURIComponent(shortLinks[0].waUrl).includes('/c/?k='), false);
   const businessLinks = reminderLinks({ match, players, venue: 'Polideportivo Colegiales', choice: 'business', android: true });
   assert.equal(businessLinks[0].waUrl.startsWith('https://wa.me/5491112345678?text='), true);
   assert.equal(businessLinks[0].waUrl.includes('package='), false);
@@ -4086,7 +4004,7 @@ test('el error del backup nombra la colección y el documento', () => {
   const app = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
   const css = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
   const version = sw.match(/const VERSION = '([^']+)'/)[1];
-  assert.equal(version, 'f7c-v233');
+  assert.equal(version, 'f7c-v235');
   assert.equal(/\b(?:confirm|alert|prompt)\s*\(/.test(app), false);
   assert.match(app, /class="slot-actions">\$\{wa\}\$\{pay\}/);
   assert.match(css, /#slots \.slot-actions \{ display: flex; flex-direction: column/);
@@ -4222,8 +4140,8 @@ test('el service worker revalida la app y no mezcla las cachés', () => {
   assert.match(app, /updateViaCache: 'none'/);
   assert.match(app, /reg\.update\(\)/);
   assert.match(app, /visibilitychange/);
-  assert.match(app, /resolvePlayerShort\(url\)/);
-  assert.match(app, /const shareUrl = short \|\| url/);
+  assert.equal(app.includes('resolvePlayerShort'), false);
+  assert.match(app, /if \(await copyText\(url\)\)/);
 });
 
 test('un tap elige y un desliz no', () => {
