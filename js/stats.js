@@ -1,6 +1,6 @@
 // Totales para la pestaña Estadísticas. Puro: no lee Firebase.
 // Un partido cancelado no suma plata ni cupo. La espera no debe.
-import { collectedSlices, dayCompensation, matchAdders, matchCompensation, signedOwner } from './compensate.js';
+import { dayCompensation, matchAdders, matchCompensation } from './compensate.js';
 import { groupByInviter } from './guests.js';
 import { monthKeyOf, monthLabel } from './ledger.js';
 import { sameOrganizer, sameOrganizerIdentity, UNSPECIFIED } from './organizers.js';
@@ -435,43 +435,10 @@ function staffForShare(staff, matches, players) {
   return people;
 }
 
-/**
- * Organizadores que de verdad estuvieron en un partido abierto a todos:
- * el que lo creó, con quién se anotó cada jugador y quién cobró.
- * Un organizador que no anotó ni cobró nada en ese partido no entra.
- */
-export function matchParticipants(match, players, staff) {
-  const known = new Set((staff || []).map((user) => user?.uid).filter(Boolean));
-  const ids = [];
-  const add = (uid) => {
-    const id = String(uid || '').trim();
-    if (id && known.has(id) && !ids.includes(id)) ids.push(id);
-  };
-  add(match?.createdByUid);
-  for (const player of players || []) {
-    if (!player || player.matchId !== match?.id || player.waiting === true) continue;
-    add(signedOwner(player, match, staff)?.uid);
-    for (const slice of collectedSlices(player, staff)) add(slice.uid);
-  }
-  return ids;
-}
-
-function openToAll(match) {
-  const adders = Array.isArray(match?.adders) ? match.adders : [];
-  return !adders.length || adders.includes('*');
-}
-
-/**
- * Si el partido nombra quién anota, esos nombres mandan sobre un uid reescrito.
- * Si es de todos, solo cuentan los organizadores que participaron (no todos los activos).
- */
-function matchForShare(match, staff, players = null) {
+/** Si el partido nombra quién anota, esos nombres mandan sobre un uid reescrito. */
+function matchForShare(match, staff) {
   const names = namedAdders(match);
-  if (!names.length) {
-    if (!players || !openToAll(match)) return match;
-    const ids = matchParticipants(match, players, staff);
-    return ids.length ? { ...match, adders: ids } : match;
-  }
+  if (!names.length) return match;
   const adders = [];
   for (const name of names) {
     const user = personByName(staff, name);
@@ -523,8 +490,8 @@ function dayCollected(matches, players, staff) {
  * no suman. Un cancelado tampoco.
  * Si el día tiene cálculo de compensación guardado, vale su fila de ahí.
  * Si no: un solo organizador, todo lo cobrado. Más de uno: su fila de
- * dayCompensation según el modo de cada partido, y en un partido de todos
- * solo entre los organizadores que participaron (matchParticipants).
+ * dayCompensation según el modo de cada partido. En partes iguales entran
+ * todos los que pueden anotar en el partido (canAdd), anoten o no.
  * No es la suma de lo que cobraron todos.
  */
 export function organizerDayShare({ matches, players, staff, uid, name, who, saved = null, now = Date.now() } = {}) {
@@ -534,7 +501,7 @@ export function organizerDayShare({ matches, players, staff, uid, name, who, sav
   // Con cálculo guardado manda lo guardado: «le corresponden» de su fila.
   if (Array.isArray(saved?.rows)) return savedShare(saved, person);
   const people = staffForShare(staff, played, players);
-  const dayMatches = played.map((match) => matchForShare(match, people, players));
+  const dayMatches = played.map((match) => matchForShare(match, people));
   const organizers = dayOrganizers(dayMatches, people);
   if (organizers.length <= 1) {
     const only = organizers[0];
@@ -653,7 +620,7 @@ export function playerOrganizerMonths({ person, players, matches, who, now = Dat
  * con los partidos de ese día que ya se jugaron.
  * Un día con varios partidos entra una sola vez. Uno con un solo
  * organizador suma lo que esa función le asigna.
- * Mes y Año no recortan por el cálculo guardado: suman los días ya jugados.
+ * Mes y Año suman los días ya jugados; un día con cálculo guardado usa lo guardado.
  */
 export function organizerShareByPeriod({ matches, players, staff, uid, name, who, grain = 'month', savedFor = null, now = Date.now() } = {}) {
   const byDay = new Map();
