@@ -6,8 +6,11 @@
  * Cargar y Devolver solo si el organizador puede cargar crédito;
  * Devolver queda deshabilitado con crédito $0.
  */
-export function playerMoreItems({ canCredit = false, creditAmount = 0 } = {}) {
-  const items = [{ key: 'share', label: 'Compartir link', disabled: false }];
+export function playerMoreItems({ canCredit = false, creditAmount = 0, canReset = false } = {}) {
+  const items = [];
+  // v237: Resetear link, solo para quien tiene la ficha a cargo (o el admin).
+  if (canReset) items.push({ key: 'reset', label: '🔃 Resetear link', disabled: false });
+  items.push({ key: 'share', label: 'Compartir link', disabled: false });
   if (canCredit) {
     items.push({ key: 'credit', label: 'Cargar Crédito', disabled: false });
     items.push({ key: 'refund', label: 'Devolver Crédito', disabled: !(Number(creditAmount) > 0) });
