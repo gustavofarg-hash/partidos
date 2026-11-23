@@ -34,6 +34,11 @@ function organizerStore({ ownToken = OWN } = {}) {
     async updateDoc() {},
     async getDocs() { return { empty: true, docs: [] }; },
     deleteField() { return null; },
+    // v233: el alta con teléfono va en un lote con su guardia.
+    writeBatch() {
+      const ops = [];
+      return { set(ref, data) { ops.push({ path: ref.path, data }); }, update() {}, delete() {}, async commit() { writes.push(...ops); } };
+    },
   };
   return { store, writes, ensured: () => ensured };
 }
@@ -206,6 +211,7 @@ test('el organizador no anota a otro con el mismo teléfono y el mensaje dice qu
   store._writeContactDoc = async () => {};
   await store.addPlayer(privateMatch, { name: 'Nico', phone: '5491187654321', rosterId: 'r-nico' }, 'Gustavo');
   assert.equal(writes.filter((row) => row.path.startsWith('players/')).length, 1);
+  assert.equal(writes.filter((row) => row.path.startsWith('phoneGuards/')).length, 1);
 });
 
 test('Autoservicio con el teléfono de otro anotado: «Ya estás anotado en este partido.»', async () => {
