@@ -49,7 +49,7 @@ import {
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v230';
+const APP_VERSION = 'f7c-v231';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -4425,6 +4425,7 @@ function dayShare(date, dayMatches) {
     staff: staffUsers(app.users),
     uid: me.uid,
     name: me.name,
+    saved: savedCompensation(date),
     now: Date.now(),
   });
 }
@@ -4508,6 +4509,7 @@ function periodShares(grain) {
     uid: me.uid,
     name: me.name,
     grain,
+    savedFor: savedCompensation,
     now: Date.now(),
   });
 }

@@ -1,6 +1,6 @@
 // Totales para la pestaña Estadísticas. Puro: no lee Firebase.
 // Un partido cancelado no suma plata ni cupo. La espera no debe.
-import { dayCompensation, matchAdders, matchCompensation } from './compensate.js';
+import { collectedSlices, dayCompensation, matchAdders, matchCompensation, signedOwner } from './compensate.js';
 import { groupByInviter } from './guests.js';
 import { monthKeyOf, monthLabel } from './ledger.js';
 import { sameOrganizer, sameOrganizerIdentity, UNSPECIFIED } from './organizers.js';
@@ -435,10 +435,43 @@ function staffForShare(staff, matches, players) {
   return people;
 }
 
-/** Si el partido nombra quién anota, esos nombres mandan sobre un uid reescrito. */
-function matchForShare(match, staff) {
+/**
+ * Organizadores que de verdad estuvieron en un partido abierto a todos:
+ * el que lo creó, con quién se anotó cada jugador y quién cobró.
+ * Un organizador que no anotó ni cobró nada en ese partido no entra.
+ */
+export function matchParticipants(match, players, staff) {
+  const known = new Set((staff || []).map((user) => user?.uid).filter(Boolean));
+  const ids = [];
+  const add = (uid) => {
+    const id = String(uid || '').trim();
+    if (id && known.has(id) && !ids.includes(id)) ids.push(id);
+  };
+  add(match?.createdByUid);
+  for (const player of players || []) {
+    if (!player || player.matchId !== match?.id || player.waiting === true) continue;
+    add(signedOwner(player, match, staff)?.uid);
+    for (const slice of collectedSlices(player, staff)) add(slice.uid);
+  }
+  return ids;
+}
+
+function openToAll(match) {
+  const adders = Array.isArray(match?.adders) ? match.adders : [];
+  return !adders.length || adders.includes('*');
+}
+
+/**
+ * Si el partido nombra quién anota, esos nombres mandan sobre un uid reescrito.
+ * Si es de todos, solo cuentan los organizadores que participaron (no todos los activos).
+ */
+function matchForShare(match, staff, players = null) {
   const names = namedAdders(match);
-  if (!names.length) return match;
+  if (!names.length) {
+    if (!players || !openToAll(match)) return match;
+    const ids = matchParticipants(match, players, staff);
+    return ids.length ? { ...match, adders: ids } : match;
+  }
   const adders = [];
   for (const name of names) {
     const user = personByName(staff, name);
@@ -488,16 +521,20 @@ function dayCollected(matches, players, staff) {
  * Lo que le corresponde a esta persona en el día.
  * Solo entran los partidos de ese día que ya se jugaron. Hoy y los que faltan
  * no suman. Un cancelado tampoco.
- * Un solo organizador: todo lo cobrado.
- * Más de uno: su fila de dayCompensation («le corresponden»),
- * según el modo de cada partido (partes iguales o lo que anotó).
+ * Si el día tiene cálculo de compensación guardado, vale su fila de ahí.
+ * Si no: un solo organizador, todo lo cobrado. Más de uno: su fila de
+ * dayCompensation según el modo de cada partido, y en un partido de todos
+ * solo entre los organizadores que participaron (matchParticipants).
  * No es la suma de lo que cobraron todos.
  */
-export function organizerDayShare({ matches, players, staff, uid, name, who, now = Date.now() } = {}) {
+export function organizerDayShare({ matches, players, staff, uid, name, who, saved = null, now = Date.now() } = {}) {
   const played = (matches || []).filter((match) => matchAlreadyPlayed(match, now));
   const person = who && typeof who === 'object' ? who : { uid: uid || '', name: name || '' };
+  if (!played.some((match) => match?.cancelled !== true)) return 0;
+  // Con cálculo guardado manda lo guardado: «le corresponden» de su fila.
+  if (Array.isArray(saved?.rows)) return savedShare(saved, person);
   const people = staffForShare(staff, played, players);
-  const dayMatches = played.map((match) => matchForShare(match, people));
+  const dayMatches = played.map((match) => matchForShare(match, people, players));
   const organizers = dayOrganizers(dayMatches, people);
   if (organizers.length <= 1) {
     const only = organizers[0];
@@ -510,6 +547,17 @@ export function organizerDayShare({ matches, players, staff, uid, name, who, now
     || calc.rows.find((item) => isThisOrganizer(item, person))
     || null;
   return roundARS(row?.entitled || 0);
+}
+
+/** Lo que le toca según el cálculo de compensación guardado. Sin fila, nada. */
+export function savedShare(saved, who) {
+  const person = who && typeof who === 'object' ? who : { uid: '', name: '' };
+  const rows = Array.isArray(saved?.rows) ? saved.rows : [];
+  const id = String(person.uid || '').trim();
+  const row = (id && rows.find((item) => item?.uid === id))
+    || rows.find((item) => item && isThisOrganizer(item, person))
+    || null;
+  return roundARS(Number(row?.entitled) || 0);
 }
 
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -607,7 +655,7 @@ export function playerOrganizerMonths({ person, players, matches, who, now = Dat
  * organizador suma lo que esa función le asigna.
  * Mes y Año no recortan por el cálculo guardado: suman los días ya jugados.
  */
-export function organizerShareByPeriod({ matches, players, staff, uid, name, who, grain = 'month', now = Date.now() } = {}) {
+export function organizerShareByPeriod({ matches, players, staff, uid, name, who, grain = 'month', savedFor = null, now = Date.now() } = {}) {
   const byDay = new Map();
   for (const match of matches || []) {
     if (!match?.id || !/^\d{4}-\d{2}-\d{2}$/.test(match.date || '')) continue;
@@ -618,7 +666,8 @@ export function organizerShareByPeriod({ matches, players, staff, uid, name, who
   for (const [date, dayMatches] of byDay) {
     const key = grain === 'year' ? date.slice(0, 4) : monthKeyOf(date);
     if (!key) continue;
-    const share = organizerDayShare({ matches: dayMatches, players, staff, uid, name, who, now });
+    const saved = typeof savedFor === 'function' ? savedFor(date) : null;
+    const share = organizerDayShare({ matches: dayMatches, players, staff, uid, name, who, saved, now });
     totals.set(key, roundARS((totals.get(key) || 0) + share));
   }
   return totals;
