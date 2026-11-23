@@ -16,6 +16,7 @@ import {
   reservationClearedByAnswer,
 } from './reminders.js';
 import { PRIVATE_WA_TEXT } from './privacy.js';
+import { playerMoreItems, playerShareTarget } from './player-more.js';
 import { activityNoticeText, activityNotices } from './notify.js';
 import { ROSTER_DENIED_WRITE, SUSPENDED_TEXT, activeSuspensions, blockingSuspensions, canonicalPhone, capitalizeWords, cleanShortName, displayName, foldText, fullNameBehind, givenName, nickOf, isRosterDenied, personKey, phoneIdentity, playerMatchesPerson, rosterByIdentity, rosterByPhone, rosterForOrganizer, rosterHeldBy, rosterIdForSuspension, searchRoster, suspensionHistoryOf, visibleRosterHits, visibleRosterPhone, withPendingRoster } from './roster.js';
 import { ALREADY_IN_MATCH, alreadyInMatch, attachRosterGuest, duplicateText, isDuplicateText, firstDuplicate, groupByInviter, inviteBlock, isAutoGuestName, isGuest, normName, placeGroup, resolveFriendNames, rootInviterId, sameDayPromoGuestRenames, waitWarning } from './guests.js';
@@ -47,7 +48,7 @@ import {
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v235';
+const APP_VERSION = 'f7c-v236';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -2750,14 +2751,72 @@ function shareRosterId(player) {
 function playerShareButton(id) {
   return `<button type="button" class="icon-btn player-share" id="${id}" aria-label="Copiar enlace">${ICON.shareNodes}</button>`;
 }
-async function copyPlayerLink(rosterId) {
-  let token = '';
-  try { token = await app.store?.ensureShareToken?.(actor().uid, actor().name) || ''; } catch { token = ''; }
-  const url = playerLink(rosterId, token);
-  if (!url) {
-    openSheet(`<h3>Enlace</h3><p>Este jugador todavía no está en Jugadores.</p><div class="sheet-actions"><button type="button" class="btn" data-close>Cerrar</button></div>`);
+/** v236: los tres puntos a la derecha del ícono de compartir. */
+function playerMoreControl(id, panel) {
+  const items = playerMoreItems({ canCredit: canOfferCredit(staffActor()), creditAmount: panel?.shownAmount || 0 });
+  const buttons = items.map((item) => `<button type="button" class="more-item" role="menuitem" data-more="${esc(item.key)}"${item.disabled ? ' disabled' : ''}>${esc(item.label)}</button>`).join('');
+  return `<div class="more-wrap"><button type="button" class="icon-btn player-more" id="${id}" aria-label="Más opciones" aria-haspopup="menu" aria-expanded="false">${ICON.more}</button><div class="more-pop" id="${id}-menu" role="menu" hidden>${buttons}</div></div>`;
+}
+function bindPlayerMore(id, { rosterId, phone, player = null, person = null, panel }) {
+  const btn = $(`#${id}`);
+  const pop = $(`#${id}-menu`);
+  if (!btn || !pop) return;
+  const outside = (event) => {
+    if (!pop.isConnected) { document.removeEventListener('click', outside, true); return; }
+    if (!pop.contains(event.target) && !btn.contains(event.target)) close();
+  };
+  const close = () => {
+    pop.hidden = true;
+    btn.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('click', outside, true);
+  };
+  btn.onclick = () => {
+    if (!pop.hidden) { close(); return; }
+    pop.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+    document.addEventListener('click', outside, true);
+  };
+  pop.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); btn.focus(); }
+  });
+  pop.onclick = (event) => {
+    const item = event.target.closest('[data-more]');
+    if (!item || item.disabled) return;
+    close();
+    const kind = item.dataset.more;
+    if (kind === 'share') sharePlayerLink(rosterId, phone);
+    else if (kind === 'credit') openCreditForm({ player, person, panel });
+    else if (kind === 'refund' && Number(panel?.shownAmount) > 0) openCreditReturnForm({ player, person, panel });
+  };
+}
+/** Compartir link: WhatsApp del jugador con el link completo; sin número, para elegir a quién. */
+async function sharePlayerLink(rosterId, phone) {
+  const to = String(phone || '').trim();
+  const pending = to ? window.open('about:blank', '_blank') : null;
+  const target = playerShareTarget({ phone: to, url: await playerShareUrl(rosterId) });
+  if (!target) {
+    if (pending && !pending.closed) pending.close();
+    playerNotListed();
     return;
   }
+  if (target.phone) { placeWa(pending, waSendUrl({ phone: target.phone, text: target.text })); return; }
+  if (navigator.share) {
+    try { await navigator.share({ text: target.text }); return; } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  openWa({ text: target.text });
+}
+/** El link completo del jugador con el código de este organizador. Vacío si no está en Jugadores. */
+async function playerShareUrl(rosterId) {
+  let token = '';
+  try { token = await app.store?.ensureShareToken?.(actor().uid, actor().name) || ''; } catch { token = ''; }
+  return playerLink(rosterId, token);
+}
+function playerNotListed() {
+  openSheet(`<h3>Enlace</h3><p>Este jugador todavía no está en Jugadores.</p><div class="sheet-actions"><button type="button" class="btn" data-close>Cerrar</button></div>`);
+}
+async function copyPlayerLink(rosterId) {
+  const url = await playerShareUrl(rosterId);
+  if (!url) { playerNotListed(); return; }
   if (await copyText(url)) { toast('Enlace copiado'); return; }
   openSheet(`<h3>Enlace</h3><p class="hint">No se pudo copiar. Seleccioná el enlace.</p><label class="field"><input id="player-link" readonly value="${esc(url)}"></label><div class="sheet-actions"><button type="button" class="btn" data-close>Cerrar</button></div>`);
   const input = $('#player-link');
@@ -4705,6 +4764,7 @@ function renderProfile(id) {
       <div class="name-share">
         <h2 class="section${fichaSuspended(person)}">${fichaName(person, person.name)}</h2>
         ${playerShareButton('profile-share')}
+        ${playerMoreControl('profile-more', money.panel)}
       </div>
       ${money.panel.nickHtml}
       ${own ? `<label class="field profile-name"><span>Nombre</span><input id="profile-name" maxlength="60" autocomplete="name" autocapitalize="words" data-cap-words="1" value="${esc(person.name)}"></label>` : ''}
@@ -4752,6 +4812,7 @@ function renderProfile(id) {
   bindBehavior($('#profile'), person);
   const profileShare = $('#profile-share');
   if (profileShare) profileShare.onclick = () => copyPlayerLink(person.id);
+  bindPlayerMore('profile-more', { rosterId: person.id, phone: person.phone || '', person, panel: money.panel });
   const addPhone = $('#profile-add-phone');
   if (addPhone && own) addPhone.onclick = () => openPhoneForm(person);
   const profileName = $('#profile-name');
@@ -7891,6 +7952,7 @@ function openPlayerMenu(m, p) {
     <div class="name-share">
       <h3 class="${suspendedClass(p).trim()}">${suspendedName(p, shownName(p))}</h3>
       ${playerShareButton('pm-share')}
+      ${playerMoreControl('pm-more', panel)}
     </div>
     <div class="player-panel" id="menu-panel">${panel.nickHtml}${panel.balance}${panel.err}${panel.notesHtml}${panel.statsButton}</div>
     <p class="hint">${fullNameBehind(p, app.roster) ? `<span id="menu-full-name" class="${suspendedClass(p).trim()}">${suspendedName(p, p.name)}</span> · ` : ''}${phoneView.phone ? esc(displayFromWa(phoneView.phone)) + ' · ' : phoneHidden(phoneView) ? esc(PRIVATE_WA_TEXT) + ' · ' : ''}Agregó: ${esc(p.addedBy || '?')}</p>
@@ -7918,6 +7980,7 @@ function openPlayerMenu(m, p) {
   bindSuspensionControls(sheet, suspend.rosterId, suspend.card);
   const menuShare = $('#pm-share');
   if (menuShare) menuShare.onclick = () => copyPlayerLink(shareRosterId(p));
+  bindPlayerMore('pm-more', { rosterId: shareRosterId(p), phone: phoneView.phone || '', player: p, panel });
   $('#pm-profile').onclick = () => { closeSheet(); openPlayerProfile(p, match?.id); };
   const payBtn = $('#pm-pay');
   if (payBtn) payBtn.onclick = () => openPaymentForm(match, p);
