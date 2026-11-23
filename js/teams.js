@@ -160,6 +160,21 @@ export function nextInGoalAt(players, now = Date.now()) {
   return at;
 }
 
+/**
+ * v241: el jugador que se suelta al terminar un arrastre, o '' si no fue un
+ * arrastre. Tiene que ser el mismo dedo que empezó, sin scroll en el medio, y
+ * moverse más de `limit` px.
+ */
+export function teamDragDrop(start, end, limit = 12) {
+  if (!start?.id || !end) return '';
+  if (start.scrolled === true) return '';
+  if (start.pointerId != null && end.pointerId != null && start.pointerId !== end.pointerId) return '';
+  const dx = Number(end.x) - Number(start.x);
+  const dy = Number(end.y) - Number(start.y);
+  if (!Number.isFinite(dx) || !Number.isFinite(dy)) return '';
+  return Math.hypot(dx, dy) > limit ? String(start.id) : '';
+}
+
 /** Saca a quien se bajó. changed es false si no estaba en ningún equipo. */
 export function dropPlayer(teams, playerId) {
   if (!teams || typeof teams !== 'object') return { changed: false, teams: null };

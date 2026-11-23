@@ -36,7 +36,7 @@ import { applyTheme, readTheme, saveTheme, watchTheme } from './theme.js';
 import { PRICES_DENIED_WRITE, allocateGuestPromo, normalizePrices, parsePriceInput, priceOfMatch, priceRecord, promoForPlayer, promoRefundAfterFree, promoSettleJoining, promoSettleLeaving, sameDayTitulars, splitPaymentAcross } from './prices.js';
 import { planRows } from './settle.js';
 import { compensationFingerprint, dayCompensation, reconcileTransfers, splitModeOf } from './compensate.js';
-import { balanceTeams, bumpGoals, bumpScore, dropPlayerOn, emptyTeams, goaliesLeft, movePlayer, normalizeScore, normalizeTeams, orderTeamsByGoal, teamsBalance, teamsMessage } from './teams.js';
+import { balanceTeams, bumpGoals, bumpScore, dropPlayerOn, emptyTeams, goaliesLeft, movePlayer, normalizeScore, normalizeTeams, orderTeamsByGoal, teamDragDrop, teamsBalance, teamsMessage } from './teams.js';
 import { appInstallUrl, appShareMessage, isPlayerDeepLink, organizerMatchesTitle, playerLink } from './share.js';
 import { isTrialPage } from './trial.js';
 import { isSelfPending, pendingSelfSignups, selfSignupRows, signupLimitFrom, signupLimitRecord } from './self-signup.js';
@@ -52,7 +52,7 @@ import {
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v240';
+const APP_VERSION = 'f7c-v241';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -1760,20 +1760,32 @@ function renderTeams(id) {
       e.preventDefault();
       release(dragId || e.dataTransfer?.getData('text/plain'), e.target);
     });
+    // v241: un arrastre empieza y termina con el mismo dedo, sin scroll en el
+    // medio. Antes, deslizar desde un nombre para scrollear dejaba el arrastre
+    // abierto (el navegador manda pointercancel, no pointerup) y el toque
+    // siguiente, por ejemplo en el arco de otro jugador, los intercambiaba.
+    const onScroll = () => { if (pointer) pointer.scrolled = true; };
+    const dropPointer = () => {
+      pointer = null;
+      window.removeEventListener('scroll', onScroll, true);
+    };
     $('#team-board').addEventListener('pointerdown', (e) => {
+      dropPointer();
       const onName = !!e.target.closest('[data-team-name]');
       if (!onName && e.target.closest('button, a, label, input')) return;
       const row = e.target.closest('[data-drag-player]');
       if (!row) return;
       nameDragged = false;
-      pointer = { id: row.dataset.dragPlayer, x: e.clientX, y: e.clientY };
+      pointer = { id: row.dataset.dragPlayer, x: e.clientX, y: e.clientY, pointerId: e.pointerId, scrolled: false };
+      // Con el dedo, si la pantalla se movió fue scroll. Con el mouse se puede arrastrar y scrollear a la vez.
+      if (e.pointerType !== 'mouse') window.addEventListener('scroll', onScroll, true);
     });
+    $('#team-board').addEventListener('pointercancel', dropPointer);
     $('#team-board').addEventListener('pointerup', (e) => {
-      if (!pointer) return;
-      const moved = Math.hypot(e.clientX - pointer.x, e.clientY - pointer.y) > 12;
-      const playerId = pointer.id;
-      pointer = null;
-      if (!moved) return;
+      const start = pointer;
+      dropPointer();
+      const playerId = teamDragDrop(start, { x: e.clientX, y: e.clientY, pointerId: e.pointerId });
+      if (!playerId) return;
       nameDragged = true;
       release(playerId, document.elementFromPoint(e.clientX, e.clientY));
     });
