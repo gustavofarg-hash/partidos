@@ -1003,6 +1003,14 @@ h2.section.suspended,
 .name-share > .section { flex: 1 1 auto; min-width: 0; margin: 4px 0 10px; }
 .sheet .name-share > h3 { flex: 1 1 auto; min-width: 0; margin: 0; }
 .player-share { color: var(--text); }
+.player-more { color: var(--text); }
+/* v236: tres puntos a la derecha de compartir */
+.more-wrap { position: relative; flex: none; }
+.more-pop { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; min-width: 200px; display: flex; flex-direction: column; padding: 6px; background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow), 0 8px 24px rgba(0,0,0,.18); }
+.more-pop[hidden] { display: none; }
+.more-item { text-align: left; min-height: 44px; padding: 10px 12px; border: 0; border-radius: 8px; background: transparent; color: inherit; font: inherit; }
+.more-item:hover:not(:disabled), .more-item:focus-visible { background: var(--green-soft); }
+.more-item:disabled { opacity: .45; }
 .share-nodes circle { fill: currentColor; stroke: none; }
 .share-nodes path { fill: none; stroke: currentColor; }
 #player-denied { padding: 48px 16px; }
