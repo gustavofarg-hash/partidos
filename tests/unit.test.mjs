@@ -1102,12 +1102,13 @@ test('la confirmación de asistencia usa HOY al cruzar la medianoche', () => {
   assert.equal(attendanceWhen('2026-10-21', after), 'Mañana');
   const url = 'https://gustavofarg-hash.github.io/futbol-colegiales/c/?k=Ab3x9Zk2';
   const today = attendanceMessage({ player, roster, when: attendanceWhen('2026-10-19', before), time: '17:30', confirmUrl: url });
-  assert.equal(today, `¡Hola Ana! ¿Confirmás que jugás HOY 17:30?\n\nRespondé en este link: ${url}`);
-  assert.equal(today.includes('Ani'), false);
+  // v239: saluda con la primera palabra del Nombre corto (antes, v127, con el nombre de la ficha).
+  assert.equal(today, `¡Hola Ani! ¿Confirmás que jugás HOY 17:30?\n\nRespondé en este link: ${url}`);
+  assert.equal(today.includes('Ana'), false);
   assert.equal(today.includes('López'), false);
   assert.equal(today.includes('Ufm0uQ4'), false);
   const rolled = attendanceMessage({ player, roster, when: attendanceWhen('2026-10-19', after), time: '17:30', confirmUrl: url });
-  assert.equal(rolled, `¡Hola Ana! ¿Confirmás que jugás lunes 19/10 17:30?\n\nRespondé en este link: ${url}`);
+  assert.equal(rolled, `¡Hola Ani! ¿Confirmás que jugás lunes 19/10 17:30?\n\nRespondé en este link: ${url}`);
   const named = reminderMessage({
     player, roster, now: before, confirmUrl: url,
     match: { date: '2026-10-19', time: '17:30', note: 'Cancha 2' },
@@ -1180,7 +1181,7 @@ test('aviso al subir de la espera y lugar reservado', () => {
     venue: 'Polideportivo Colegiales',
     confirmUrl: url,
   });
-  assert.equal(msg, `¡Hola Juan Pérez! Se hizo un lugar en el fútbol 7 en Polideportivo Colegiales el jueves 22/10 a las 21:00 hs. ¿Confirmás tu presencia? ¿Querés que te deje anotado? Respondé en este link: ${url}`);
+  assert.equal(msg, `¡Hola Juan! Se hizo un lugar en el fútbol 7 en Polideportivo Colegiales el jueves 22/10 a las 21:00 hs. ¿Confirmás tu presencia? ¿Querés que te deje anotado? Respondé en este link: ${url}`);
   const cinco = promotionMessage({
     player: { name: 'Juan Pérez' },
     match: { date: '2026-10-22', time: '21:00', perTeam: 5 },
@@ -2930,7 +2931,9 @@ test('el recordatorio de la transferencia nombra ayer, el día o la fecha', () =
   assert.equal(text, 'Qué tal Ana? No te olvides de transferirme el partido de ayer porfa');
   assert.equal(text.includes('http'), false);
   assert.equal(text.includes('$'), false);
-  assert.equal(givenName({ name: 'Ani', rosterId: 'r1', shortName: 'Ani' }, [{ id: 'r1', name: 'Ana María López', shortName: 'Ani' }]), 'Ana');
+  assert.equal(givenName({ name: 'Ani', rosterId: 'r1', shortName: 'Ani' }, [{ id: 'r1', name: 'Ana María López', shortName: 'Ani' }]), 'Ani');
+  assert.equal(givenName({ name: 'Ana María López', rosterId: 'r1' }, [{ id: 'r1', name: 'Ana María López', shortName: 'Ani' }]), 'Ani');
+  assert.equal(givenName({ name: 'Ana María López', rosterId: 'r1' }, [{ id: 'r1', name: 'Ana María López' }]), 'Ana');
   assert.equal(givenName({ name: 'Luis Gómez' }, []), 'Luis');
   assert.equal(givenName({ name: '' }, []), '');
   const url = waSendUrl({ phone: '5491112345678', text: transferReminderText('Juan', transferReminderWhen('2026-10-11', now)) });
@@ -4004,7 +4007,7 @@ test('el error del backup nombra la colección y el documento', () => {
   const app = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
   const css = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
   const version = sw.match(/const VERSION = '([^']+)'/)[1];
-  assert.equal(version, 'f7c-v238');
+  assert.equal(version, 'f7c-v240');
   assert.equal(/\b(?:confirm|alert|prompt)\s*\(/.test(app), false);
   assert.match(app, /class="slot-actions">\$\{wa\}\$\{pay\}/);
   assert.match(css, /#slots \.slot-actions \{ display: flex; flex-direction: column/);
@@ -4234,7 +4237,7 @@ test('la carga muestra el avance y deja el aviso de éxito hasta cerrarlo', asyn
   assert.equal(commits.some((line) => line.includes('users/admin-uid')), false);
 });
 
-test('el alta de Firestore no está en la lista hasta el snapshot y el nombre completo no pasa el filtro', async () => {
+test('el alta de Firestore no está en la lista hasta el snapshot y el nombre completo la encuentra', async () => {
   const store = new FirebaseStore();
   store.db = {};
   const snaps = {};
@@ -4275,7 +4278,8 @@ test('el alta de Firestore no está en la lista hasta el snapshot y el nombre co
   const gap = withPendingRoster(store.state.roster, pending, Date.now());
   const actor = { uid: 'gustavo', name: 'Gustavo' };
   assert.equal(rosterForOrganizer(gap.roster, actor).some((person) => person.id === id), true);
-  assert.equal(searchRoster(gap.roster, 'López Visible Completo').some((person) => person.id === id), false);
+  // v239: la búsqueda acepta varias palabras; el nombre completo ya encuentra la ficha.
+  assert.equal(searchRoster(gap.roster, 'López Visible Completo').some((person) => person.id === id), true);
   assert.equal(searchRoster(gap.roster, '').some((person) => person.id === id), true);
   assert.equal(gap.pending, pending);
   snaps.roster({

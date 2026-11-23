@@ -44,6 +44,8 @@ function cardView(card) {
     player: {
       id: playerId,
       name: card.name,
+      // v239: saluda con el Nombre corto si la ficha lo tiene.
+      shortName: card.shortName || '',
       matchId: card.matchId,
       confirmToken: token,
       confirmed: card.confirmed || null,

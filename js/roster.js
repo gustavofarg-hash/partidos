@@ -102,8 +102,14 @@ export function displayName(player, roster) {
   return nickOf(player, roster) || player?.name || '';
 }
 
-/** Nombre de pila: el primer término de la ficha, o el del partido si no hay ficha. */
+/**
+ * Cómo se lo saluda en los mensajes. v239: la primera palabra del Nombre corto
+ * (el apodo de la lista, igual que nickOf). Sin apodo, el primer término del
+ * nombre de la ficha, o el del partido si no hay ficha.
+ */
 export function givenName(player, roster) {
+  const nick = nickOf(player, roster).split(' ').filter(Boolean)[0];
+  if (nick) return nick;
   const list = roster || [];
   const id = String(player?.rosterId || '').trim();
   const person = id ? list.find((item) => item?.id === id) : null;
@@ -137,9 +143,19 @@ export function rosterHit(person, query) {
   const q = foldText(raw);
   const words = `${foldText(person?.name)} ${foldText(person?.shortName)}`.split(/\s+/).filter(Boolean);
   if (q && words.some((word) => word.startsWith(q))) return true;
+  const phone = phoneDigits(person?.phone);
   const digits = phoneDigits(raw);
-  if (digits && phoneDigits(person?.phone).includes(digits)) return true;
-  return false;
+  if (digits && phone.includes(digits)) return true;
+  // v239: varias palabras, en cualquier orden. Cada una tiene que ser el
+  // comienzo de una palabra del nombre o del apodo («per juan» encuentra a
+  // Juan Pérez). Una palabra de solo números puede ser parte del teléfono.
+  const parts = q.split(/\s+/).filter(Boolean);
+  if (parts.length < 2) return false;
+  return parts.every((part) => {
+    if (words.some((word) => word.startsWith(part))) return true;
+    const partDigits = /^[\d+()-]+$/.test(part) ? phoneDigits(part) : '';
+    return !!partDigits && phone.includes(partDigits);
+  });
 }
 
 /**

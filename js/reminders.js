@@ -2,7 +2,7 @@
 // confirmar.html y las pruebas. No abre WhatsApp ni escribe en Firestore.
 import { attendanceWhen, clockTime, confirmScheduleText, confirmSlotLabel, labelDate, todayISO, toEpoch } from './dates.js';
 import { sameOrganizer } from './organizers.js';
-import { givenName, personKey, visibleRosterPhone } from './roster.js';
+import { givenName, nickOf, personKey, rosterHolderIds, visibleRosterPhone } from './roster.js';
 import { playerAccess } from './access.js';
 import { waSendUrl } from './phone.js';
 import { publicAppOrigin } from './trial.js';
@@ -59,10 +59,10 @@ export function waReminderUrl(phone, text, opts = {}) {
  * Documento público de confirmación. No lleva teléfono: la página anónima
  * solo puede leer este documento, y el id es el token del link.
  */
-export function confirmationRecord({ playerId, player, match }) {
+export function confirmationRecord({ playerId, player, match, roster }) {
   const confirmed = player?.confirmed === 'si' || player?.confirmed === 'no' ? player.confirmed : null;
   return {
-    ...confirmationIdentity({ playerId, player, match }),
+    ...confirmationIdentity({ playerId, player, match, roster }),
     confirmed,
     confirmedAt: typeof player?.confirmedAt === 'number' ? player.confirmedAt : null,
   };
@@ -72,11 +72,13 @@ export function confirmationRecord({ playerId, player, match }) {
  * Lo que escribe un organizador. Sin `confirmed` ni `confirmedAt`: un merge
  * no puede borrar el «Sí, juego» que guardó la página anónima.
  */
-export function confirmationIdentity({ playerId, player, match }) {
+export function confirmationIdentity({ playerId, player, match, roster }) {
   return {
     playerId,
     matchId: player?.matchId || match?.id || '',
     name: player?.name || '',
+    // v239: la página de confirmar saluda con el Nombre corto. Vacío si no hay.
+    shortName: nickOf(player, roster),
     date: match?.date || player?.matchDate || '',
     time: match?.time || '',
     note: match?.note || '',
@@ -220,8 +222,9 @@ export function confirmSummary(players) {
 }
 
 /** Aviso para quien sube de la lista de espera. No manda el mensaje: solo lo arma. */
-export function promotionMessage({ player, match, venue, confirmUrl }) {
-  const name = String(player?.name || '').trim() || 'hola';
+export function promotionMessage({ player, match, venue, confirmUrl, roster }) {
+  // v239: el primer término del Nombre corto, como en el recordatorio.
+  const name = givenName(player, roster) || 'hola';
   const when = labelDate(match?.date);
   const time = match?.time || '--:--';
   const court = courtLabel(match);
@@ -256,9 +259,30 @@ export function reminderDueAt(match) {
  * Jugadores que anotó esta persona. «Gustavo» y «Martín» viejos coinciden
  * con la cuenta del mismo nombre, sin importar mayúsculas ni acentos.
  */
-export function playersForOrganizer(players, organizer) {
+export function playersForOrganizer(players, organizer, { actor, roster } = {}) {
   if (!organizer) return [];
-  return (players || []).filter((player) => sameOrganizer(player?.addedBy, organizer));
+  const uid = String(actor?.uid || '').trim();
+  const list = roster || [];
+  return (players || []).filter((player) => {
+    if (sameOrganizer(player?.addedBy, organizer)) return true;
+    if (!uid) return false;
+    // v239: anotado a nombre de esta cuenta aunque el nombre haya cambiado.
+    if (String(player?.addedByUid || '').trim() === uid) return true;
+    return selfLinkRowHeldBy(player, list, uid);
+  });
+}
+
+/**
+ * v239: alta por un link sin organizador (links viejos, sin token): la fila
+ * queda «anotada por» el propio jugador. Cuenta para quien tiene su ficha en
+ * Jugadores (titular explícito), para que salga en «Mis jugadores».
+ */
+function selfLinkRowHeldBy(player, roster, uid) {
+  const rosterId = String(player?.rosterId || '').trim();
+  if (!rosterId || String(player?.signedUpWith || '').trim()) return false;
+  if (!sameOrganizer(player?.addedBy, player?.name)) return false;
+  const person = roster.find((item) => item?.id === rosterId);
+  return !!person && rosterHolderIds(person).includes(uid);
 }
 
 /**
@@ -310,8 +334,8 @@ export function matchesCrossingReminderWindow(matches, previousNow, now) {
 }
 
 /** Aviso de que el partido no se juega. Sin link para confirmar. */
-export function cancelMessage({ player, match, venue }) {
-  const name = String(player?.name || '').trim() || 'hola';
+export function cancelMessage({ player, match, venue, roster }) {
+  const name = givenName(player, roster) || 'hola';
   const when = labelDate(match?.date);
   const time = match?.time || '--:--';
   const court = courtLabel(match);
@@ -322,12 +346,12 @@ export function cancelMessage({ player, match, venue }) {
 }
 
 /** Un link por jugador con teléfono. No abre WhatsApp. */
-export function cancelLinks({ match, players, venue, choice, android } = {}) {
+export function cancelLinks({ match, players, venue, choice, android, roster } = {}) {
   const out = [];
   for (const p of players || []) {
     const phone = String(p?.phone || '').trim();
     if (!phone || !p?.id) continue;
-    const text = cancelMessage({ player: p, match, venue });
+    const text = cancelMessage({ player: p, match, venue, roster });
     out.push({ id: p.id, name: p.name, phone, text, waUrl: waSendUrl({ phone, text, choice, android }) });
   }
   return out;

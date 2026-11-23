@@ -213,7 +213,7 @@ test('reglas: la clave no es pública y las fichas sin resetear siguen por el ca
 
 test('v237: versión, precache y botón en la app', () => {
   const sw = readFileSync(new URL('../sw.js', import.meta.url), 'utf8');
-  assert.ok(sw.includes('f7c-v23'));
+  assert.ok(/f7c-v2\d\d/.test(sw));
   assert.ok(sw.includes("'js/link-reset.js'"));
   const app = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
   assert.ok(app.includes("if (kind === 'reset') resetPlayerLinkFlow(rosterId, phone);"));

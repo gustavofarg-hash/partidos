@@ -118,6 +118,7 @@ import {
 import { BACKUP_COLLECTIONS, BACKUP_WRITE_BATCH, COLLECTION_LABELS, RESET_STALLED, TRIAL_WRITE_PARALLEL, backupReadError, backupWriteError, buildBackup, firestoreRestFields, hostsBeforeGuests, parseBackup, plainValue, remapTrialBackup, requireAdmin, reviveValue, trialLinkStages, trialMockToken, trialOpKey, trialPlayerPlan, trialShouldReplace, withDeadline } from './backup.js';
 import { canSeeLog, inLogRange, matchEditDetail, pagoEntry, partidoEntry, paymentLines, playerLogFields, selfMoveEntry, LOG_LIMIT, weekRange, rangeMillis } from './log.js';
 import { behaviorDeleteLog, behaviorLog, cleanBehaviorEntry } from './behavior.js';
+import { statsFetchRange } from './stats-range.js';
 
 function reportBackupProgress(onProgress, done, total) {
   if (typeof onProgress !== 'function') return;
@@ -776,6 +777,7 @@ class LocalStore {
     db.confirmations ||= {};
     const players = Object.entries(db.players).map(([id, player]) => ({ id, ...player }));
     const matches = Object.entries(db.matches).map(([id, match]) => ({ id, ...match }));
+    const roster = Object.entries(db.roster || {}).map(([id, person]) => ({ id, ...person }));
     const now = new Date();
     const live = new Set();
     for (const player of players) {
@@ -787,6 +789,7 @@ class LocalStore {
         playerId: player.id,
         player: { ...player, confirmed: prev.confirmed != null ? prev.confirmed : player.confirmed, confirmedAt: prev.confirmedAt != null ? prev.confirmedAt : player.confirmedAt },
         match,
+        roster,
       });
       const slots = upcomingConfirmSlots({ players, matches, player, now });
       if (slots.length >= 2 && slots.some((slot) => slot.token === player.confirmToken)) next.also = slots;
@@ -2017,7 +2020,7 @@ export class FirebaseStore {
     this._compUnscoped = false;
     this._named = {};
     this._unsubs = [];
-    this.state = { matches: [], players: [], roster: [], rosterNotes: {}, suspensions: [], suspensionHistory: [], payBatches: [], behavior: [], rosterError: null, organizers: [], organizersError: null, venues: [], venuesError: null, confirmations: [], prices: null, pricesError: null, credits: [], creditsError: null, creditsReady: false, playersReady: false, compensations: [], playerContacts: {}, rosterContacts: {}, historyError: '', historyHasMore: false, historyLoading: false, log: [], logError: '', confirmSeen: [], guestMatchError: '', rosterWatch: [], rosterCovered: [], rosterDates: [] };
+    this.state = { matches: [], players: [], roster: [], rosterNotes: {}, suspensions: [], suspensionHistory: [], payBatches: [], behavior: [], rosterError: null, organizers: [], organizersError: null, venues: [], venuesError: null, confirmations: [], prices: null, pricesError: null, credits: [], creditsError: null, creditsReady: false, playersReady: false, compensations: [], playerContacts: {}, rosterContacts: {}, historyError: '', historyHasMore: false, historyLoading: false, log: [], logError: '', confirmSeen: [], guestMatchError: '', rosterWatch: [], rosterCovered: [], rosterDates: [], statsMatches: [], statsPlayers: [], statsLoading: false, statsError: '' };
     this._noteMoves = new Set();
     this._rosterReady = false;
     this._logRange = weekRange();
@@ -2055,6 +2058,65 @@ export class FirebaseStore {
         this.state.historyLoading = false;
         this._emit();
       }
+    }
+  }
+  /**
+   * v240: Estadísticas. El historial trae los últimos 30 partidos pasados; los
+   * días del rango que todavía no trajo se piden una sola vez (getDocs, sin
+   * escucha), con sus jugadores, y quedan en memoria en la sesión. Si el
+   * historial ya trajo todo lo pasado, no lee nada. Devuelve true si leyó.
+   */
+  async loadStatsRange(from, to) {
+    if (!this.fs?.getDocs || this._guest || !this.actor?.uid || !this.db) return false;
+    if (this._statsBusy || Date.now() < (this._statsRetryAt || 0)) return false;
+    const bounds = this._historyBounds || historyBounds(this._historyFilter);
+    const loaded = bounds.mode === 'recent'
+      ? {
+        ready: this._historySeen === true && this.state.historyLoading !== true && !this._historyBusy,
+        hasMore: this.state.historyHasMore === true,
+        oldest: this._historyCursor || '',
+      }
+      : null;
+    this._statsCovered ||= [];
+    const want = statsFetchRange({ from, to, loaded, covered: this._statsCovered });
+    if (!want) return false;
+    this._statsBusy = true;
+    this.state.statsLoading = true;
+    this._emit();
+    try {
+      const { collection, query, where, getDocs } = this.fs;
+      const plan = matchQueryPlan('history', { mode: 'range', from: want.from, to: want.to }, want.to);
+      const matches = this._takeMatchSnap(await getDocs(this._applyMatchPlan(plan)));
+      // Los cancelados no suman: no hace falta leer sus jugadores.
+      const ids = matches.filter((match) => match?.id && match.cancelled !== true).map((match) => match.id);
+      const uid = this.actor.uid;
+      const base = collection(this.db, 'players');
+      const players = [];
+      for (const chunk of chunkList(ids, 30)) {
+        const [star, mine] = await Promise.all([
+          getDocs(query(base, where('matchId', 'in', chunk), where('viewers', 'array-contains', EVERYONE))),
+          getDocs(query(base, where('matchId', 'in', chunk), where('viewers', 'array-contains', uid))),
+        ]);
+        players.push(...this._docRows(star), ...this._docRows(mine));
+      }
+      const byMatch = new Map((this.state.statsMatches || []).map((row) => [row.id, row]));
+      for (const row of matches) if (row?.id) byMatch.set(row.id, row);
+      const byPlayer = new Map((this.state.statsPlayers || []).map((row) => [row.id, row]));
+      for (const row of players) if (row?.id) byPlayer.set(row.id, row);
+      this.state.statsMatches = [...byMatch.values()];
+      this.state.statsPlayers = [...byPlayer.values()];
+      this._statsCovered.push(want);
+      this.state.statsError = '';
+      return true;
+    } catch (error) {
+      console.error(error?.code || 'sin-codigo', error);
+      this._statsRetryAt = Date.now() + 30000;
+      this.state.statsError = 'No se pudieron cargar los partidos anteriores.';
+      return false;
+    } finally {
+      this._statsBusy = false;
+      this.state.statsLoading = false;
+      this._emit();
     }
   }
   syncDay(now = Date.now()) {
@@ -2870,6 +2932,7 @@ export class FirebaseStore {
     this._historyOlder = [];
     this._historyCursor = '';
     this._historyBusy = false;
+    this._historySeen = false;
     this.state.historyHasMore = false;
     this.state.historyLoading = false;
     if (bounds.empty) {
@@ -2886,6 +2949,7 @@ export class FirebaseStore {
     const un = onSnapshot(q, (snap) => {
       this._noteSnap(snap);
       this.state.historyError = '';
+      this._historySeen = true;
       const rows = this._takeMatchSnap(snap);
       if (bounds.mode !== 'recent') {
         this._historyFirst = rows;
@@ -3763,7 +3827,7 @@ export class FirebaseStore {
   async _putConfirmation(token, playerId, player, match, slots) {
     if (!token) return;
     const { doc, setDoc } = this.fs;
-    const body = confirmationIdentity({ playerId, player, match });
+    const body = confirmationIdentity({ playerId, player, match, roster: this.state.roster });
     const listed = slots.some((slot) => slot.token === token);
     body.also = listed && slots.length >= 2 ? slots : [];
     await setDoc(doc(this.db, 'confirmations', token), body, { merge: true });
@@ -4519,7 +4583,7 @@ export class FirebaseStore {
     const cref = doc(this.db, 'confirmations', token);
     if (yes) {
       const match = this.state.matches.find((item) => item.id === player.matchId);
-      const body = confirmationIdentity({ playerId: id, player: { ...player, confirmToken: token }, match });
+      const body = confirmationIdentity({ playerId: id, player: { ...player, confirmToken: token }, match, roster: this.state.roster });
       await setDoc(cref, { ...body, confirmed: 'si', confirmedAt: now }, { merge: true });
     } else {
       try { await updateDoc(cref, { confirmed: deleteField(), confirmedAt: deleteField() }); }

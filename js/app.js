@@ -43,13 +43,16 @@ import { isSelfPending, pendingSelfSignups, selfSignupRows, signupLimitFrom, sig
 import { confirmBannerText, confirmWhatsAppText, unseenConfirmations } from './confirm-notice.js';
 import { iosPushHint, playerPushAvailable, registerOrganizerPush, registerPlayerPush } from './push.js';
 import { bindTap, tapChose } from './tap.js';
+import { SHORTCUT_DOUBLE_MS, shortcutHash, shortcutMatch } from './shortcut.js';
+import { mergeById, statsRangesFor } from './stats-range.js';
+import { DB_GENERIC, adminOnlyDetail, connectionBack, storeErrorNotice, writeFailureFor } from './db-notice.js';
 import { BACKUP_COLLECTIONS, BACKUP_LOADED_OK, COLLECTION_LABELS, backupFilename, backupProgressText, backupSurfaceMessage, clearTrialResume, parseBackup, readTrialResume, resetProgressText, trialBackupResultText, trialResumeId, writeTrialResume } from './backup.js';
 import {
   DEFAULT_VENUE_ID, DEFAULT_VENUE_NAME, VENUES_DENIED_WRITE, capacityFor, cleanCourt, courtLabel, courtMark, defaultVenueId, filterHistoryByVenues, footballLabel, footballPhrase, historyVenueOptions, isVenueDenied, matchCapacity, matchVenueId, perTeamOf, perTeamOptions, venueChoices, venueLabel,
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v238';
+const APP_VERSION = 'f7c-v240';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -277,6 +280,28 @@ $('#toast')?.addEventListener('click', () => {
 });
 function showError(msg) {
   const b = $('#error-banner'); b.textContent = msg; b.hidden = !msg;
+  if (msg !== app.connNotice) app.connNotice = '';
+}
+function isAdminUser() {
+  return app.role === 'admin';
+}
+// v240 (pedido 5): «Sin conexión, reintentando…» para organizadores; el admin
+// ve el detalle. Los dos se borran solos al volver la respuesta del servidor.
+function showConnectionNotice(error) {
+  const notice = storeErrorNotice(error, { admin: isAdminUser(), rulesMsg: RULES_MSG });
+  showError(notice.text);
+  app.connNotice = notice.connection ? notice.text : '';
+}
+function clearConnectionNotice(view) {
+  if (!connectionBack({
+    shown: !!app.connNotice,
+    serverOk: app.store?.serverOk === true,
+    fromCache: view?.fromCache === true,
+    online: typeof navigator === 'undefined' ? true : navigator.onLine,
+  })) return;
+  const b = $('#error-banner');
+  if (b && b.textContent === app.connNotice) { b.textContent = ''; b.hidden = true; }
+  app.connNotice = '';
 }
 // El aviso de éxito espera a que el servidor confirme. Si Firebase rechaza
 // (límite diario o reglas), no se dice que se guardó: el aviso es el error
@@ -307,7 +332,7 @@ function run(p, okMsg, deniedMsg) {
     else if (e?.code === 'suspended') askNotice(e.message || SUSPENDED_TEXT);
     else if (e?.paymentWrite) toast(paymentFailureText(e, e.playerId), 4500);
     else if (deniedMsg && isPermissionDenied(e)) toast(deniedMsg);
-    else toast(writeFailureText(e), 4500);
+    else toast(writeFailureFor(writeFailureText(e), isAdminUser()), 4500);
   });
 }
 /** Un Guardar: los pagos y el saldo, y el recuerdo para poder anularlo entero. */
@@ -1374,6 +1399,29 @@ function placeOf(match) {
 function capOf(match) {
   return matchCapacity(match);
 }
+// v239: el ícono de arriba es un atajo. Un toque: el partido en juego (o el
+// próximo). Dos toques seguidos: los Equipos de ese partido.
+let brandTapTimer = null;
+function brandIconTap() {
+  if (brandTapTimer) {
+    clearTimeout(brandTapTimer);
+    brandTapTimer = null;
+    goShortcut(true);
+    return;
+  }
+  brandTapTimer = setTimeout(() => {
+    brandTapTimer = null;
+    goShortcut(false);
+  }, SHORTCUT_DOUBLE_MS);
+}
+function goShortcut(teams) {
+  const match = shortcutMatch(app.matches, Date.now());
+  if (!match) toast('No hay partidos próximos');
+  if (sheet.open) closeSheet();
+  const hash = shortcutHash(match, teams);
+  if (location.hash !== hash) location.hash = hash;
+}
+
 function knownMatches() {
   const byId = new Map();
   for (const match of [...(app.matches || []), ...(app.history || [])]) {
@@ -1641,11 +1689,11 @@ function renderTeams(id) {
     return true;
   };
   if (!readOnly) {
-    $('#team-board').addEventListener('pointerdown', (e) => {
-      const goal = e.target.closest('[data-goal]');
-      const row = e.target.closest('[data-drag-player]');
-      if (!goal || !row || (e.button && e.button > 0)) return;
-      e.preventDefault();
+    // v239: − y + cuentan solo con un toque. Deslizar el dedo para scrollear
+    // la lista no suma ni resta goles (igual que el tanteador).
+    bindTap($('#team-board'), '[data-goal]', (goal) => {
+      const row = goal.closest('[data-drag-player]');
+      if (!row) return;
       goalTapAt = Date.now();
       queueGoal(row.dataset.dragPlayer, Number(goal.dataset.goal));
     });
@@ -1654,11 +1702,7 @@ function renderTeams(id) {
     if (!readOnly) {
       const row = e.target.closest('[data-drag-player]');
       const goal = e.target.closest('[data-goal]');
-      if (goal && row) {
-        if (Date.now() - goalTapAt < 700) return;
-        queueGoal(row.dataset.dragPlayer, Number(goal.dataset.goal));
-        return;
-      }
+      if (goal && row) return;
       const arco = e.target.closest('[data-arco]');
       if (arco && row) {
         run(app.store.setInGoal(row.dataset.dragPlayer, arco.getAttribute('aria-pressed') !== 'true'));
@@ -2159,7 +2203,7 @@ function renderMatch(id) {
         app.matchMiss[id] = 'loading';
         Promise.resolve(app.store.ensureMatch?.(id)).then((result) => {
           app.matchMiss[id] = result === 'denied' ? 'denied' : 'done';
-          if (result === 'denied') showError(RULES_MSG);
+          if (result === 'denied') showError(isAdminUser() ? RULES_MSG : DB_GENERIC);
           const current = route();
           if (current.name === 'match' && current.id === id) render();
         });
@@ -2499,7 +2543,7 @@ function confirmPlayerPlace(player, okMsg) {
 const REMINDER_BANNER = 'Faltan 2 horas: mandá los recordatorios';
 
 function myReminderPlayers(matchId) {
-  return playersForOrganizer(withAgendaPhones(playersOf(matchId), app.roster, actor()), app.who);
+  return playersForOrganizer(withAgendaPhones(playersOf(matchId), app.roster, actor()), app.who, { actor: actor(), roster: app.roster });
 }
 
 function reminderBanners(matches) {
@@ -2558,7 +2602,7 @@ async function openReminders(m) {
   }).map((row) => [row.id, row]));
   const hrefFor = (link) => link?.waUrl || '';
   const paint = () => {
-    const visible = showAll ? fresh : playersForOrganizer(fresh, app.who);
+    const visible = showAll ? fresh : playersForOrganizer(fresh, app.who, { actor: actor(), roster: app.roster });
     const prog = reminderProgress(visible);
     const rows = visible.map((p) => {
       const link = linkById.get(p.id);
@@ -2615,7 +2659,7 @@ async function openReminders(m) {
       link.textContent = 'Enviar de nuevo';
       const line = $('#remind-prog');
       if (line) {
-        const nowProg = reminderProgress(showAll ? fresh : playersForOrganizer(fresh, app.who));
+        const nowProg = reminderProgress(showAll ? fresh : playersForOrganizer(fresh, app.who, { actor: actor(), roster: app.roster }));
         line.textContent = `${nowProg.sent} de ${nowProg.total} enviados${showAll ? ' · todos' : ' · los que anotaste'}`;
       }
       run(app.store.markReminderSent(id));
@@ -2700,7 +2744,7 @@ async function reactivateMatch(m) {
 
 async function offerCancelWhatsApp(match) {
   const people = [...playersOf(match.id), ...waitingOf(match.id)];
-  const links = cancelLinks({ match, players: people, venue: placeOf(match) });
+  const links = cancelLinks({ match, players: people, venue: placeOf(match), roster: app.roster });
   if (!links.length) {
     toast(people.some(phoneHidden) ? PRIVATE_WA_TEXT : 'Nadie tiene WhatsApp para avisar la cancelación.');
     return;
@@ -2729,7 +2773,7 @@ async function offerPromotionWhatsApp(player, match) {
   if (!(await askYesNo(`¿Avisarle por WhatsApp a ${player.name} que subió al partido?`))) return;
   const pending = window.open('about:blank', '_blank');
   const confirmUrl = confirmPageUrl({ matchId: match.id, playerId: player.id, token });
-  const text = promotionMessage({ player, match, venue: placeOf(match), confirmUrl });
+  const text = promotionMessage({ player, match, venue: placeOf(match), confirmUrl, roster: app.roster });
   placeWa(pending, waSendUrl({ phone, text }));
 }
 async function copyText(text) {
@@ -4346,11 +4390,17 @@ function renderStats(r) {
   const selEnd = searchFocused ? prev.selectionEnd : 0;
   const current = STATS_MODES.find((item) => item.id === mode) || STATS_MODES[0];
   const seg = `<div class="seg stats-seg" id="stats-mode">${STATS_MODES.map((item) => `<a class="btn ${item.id === mode ? 'primary' : ''}" href="${statsHash(item.id)}"${item.id === mode ? ' aria-current="page"' : ''}>${item.label}</a>`).join('')}</div>`;
-  let body = '';
-  if (mode === 'jugador') body = statsPlayerBody(r.id);
-  else if (mode === 'dia') body = statsDayBody(r.id);
-  else body = statsPeriodBody(mode === 'anio' ? 'year' : 'month', r.id);
+  requestStatsRanges(mode, r.id);
+  let body = statsLoadNote();
+  if (mode === 'jugador') body += statsPlayerBody(r.id);
+  else if (mode === 'dia') body += statsDayBody(r.id);
+  else body += statsPeriodBody(mode === 'anio' ? 'year' : 'month', r.id);
   if (!replaceView(`<div id="stats-view"><h2 class="section" id="stats-title">${esc(current.title)}</h2>${seg}${body}</div>`)) return;
+  const older = $('#stats-older');
+  if (older) older.onclick = () => {
+    app.statsMonthsBack = Math.min(24, (app.statsMonthsBack || 0) + 1);
+    render();
+  };
   const input = $('#stats-q');
   if (input) {
     bindComposedSearch(input, () => {
@@ -4379,12 +4429,33 @@ function renderStats(r) {
   });
 }
 
+// v240: Estadísticas suma lo cargado más lo que pidió para el mes (o el año).
+function statsMatchList() {
+  return mergeById(knownMatches(), app.statsMatches);
+}
+function statsPlayerList() {
+  return mergeById(app.players || [], app.statsPlayers);
+}
+function requestStatsRanges(mode, id) {
+  const load = app.store?.loadStatsRange;
+  if (typeof load !== 'function') return;
+  const ranges = statsRangesFor({ mode, id, today: todayISO(), monthsBack: app.statsMonthsBack || 0 });
+  for (const range of ranges) {
+    Promise.resolve(load.call(app.store, range.from, range.to)).catch(() => {});
+  }
+}
+function statsLoadNote() {
+  if (app.statsLoading) return '<p class="hint" id="stats-loading">Cargando los partidos anteriores…</p>';
+  if (app.statsError) return `<p class="hint" id="stats-load-error">${esc(app.statsError)}</p>`;
+  return '';
+}
+
 function statsRosterPerson(id) {
   const person = (app.roster || []).find((row) => row.id === id);
   if (!person) return null;
   if (rosterHeldBy(person, staffActor())) return person;
-  const visible = new Set(knownMatches().map((match) => match.id));
-  const seen = (app.players || []).some((player) => playerMatchesPerson(player, person) && visible.has(player.matchId));
+  const visible = new Set(statsMatchList().map((match) => match.id));
+  const seen = statsPlayerList().some((player) => playerMatchesPerson(player, person) && visible.has(player.matchId));
   return seen ? person : null;
 }
 
@@ -4404,8 +4475,8 @@ function statsPlayerBody(id) {
     const me = actor();
     const built = playerOrganizerMonths({
       person,
-      players: app.players,
-      matches: knownMatches(),
+      players: statsPlayerList(),
+      matches: statsMatchList(),
       who: { uid: me.uid, name: me.name },
     });
     const monthRows = built.map((row) => {
@@ -4436,11 +4507,12 @@ function statsPlayerBody(id) {
 }
 
 function listedPlayers(dayMatches) {
+  const all = statsPlayerList();
   const ids = new Set();
   for (const match of dayMatches || []) {
-    for (const player of countedForMoney(app.players, match)) ids.add(player.id);
+    for (const player of countedForMoney(all, match)) ids.add(player.id);
   }
-  return (app.players || []).filter((player) => ids.has(player.id));
+  return all.filter((player) => ids.has(player.id));
 }
 function dayShare(date, dayMatches) {
   const me = actor();
@@ -4455,7 +4527,7 @@ function dayShare(date, dayMatches) {
   });
 }
 function statsDayBody(id) {
-  const matches = knownMatches().filter((match) => match?.date);
+  const matches = statsMatchList().filter((match) => match?.date);
   const byDay = new Map();
   for (const match of matches) {
     if (!byDay.has(match.date)) byDay.set(match.date, []);
@@ -4492,7 +4564,7 @@ function statsDayBody(id) {
   const who = { uid: me.uid, name: me.name };
   const summary = daySignupSummary({
     matches: dayMatches,
-    players: app.players,
+    players: statsPlayerList(),
     prices: livePrices(),
     who,
   });
@@ -4528,8 +4600,8 @@ function periodCountLabel(bucket) {
 function periodShares(grain) {
   const me = actor();
   return organizerShareByPeriod({
-    matches: knownMatches(),
-    players: app.players,
+    matches: statsMatchList(),
+    players: statsPlayerList(),
     staff: staffUsers(app.users),
     uid: me.uid,
     name: me.name,
@@ -4542,8 +4614,8 @@ function statsPeriodBody(grain, id) {
   const mode = grain === 'year' ? 'anio' : 'mes';
   const me = actor();
   const buckets = periodBuckets({
-    matches: knownMatches(),
-    players: app.players,
+    matches: statsMatchList(),
+    players: statsPlayerList(),
     prices: livePrices(),
     grain,
     who: { uid: me.uid, name: me.name },
@@ -4556,7 +4628,11 @@ function statsPeriodBody(grain, id) {
       const mine = `<span class="stats-entitled">${esc(entitledLabel(shares.get(bucket.key) || 0))}</span>`;
       return `<li class="slot" data-period="${esc(bucket.key)}"><a class="who" href="${statsHash(mode, bucket.key)}"><div class="name">${esc(bucket.label)}</div><div class="sub"><span>${periodCountLabel(bucket)}</span><span>${esc(formatARS(bucket.signedAmount))}</span></div>${mine}</a></li>`;
     }).join('');
-    return `<ul class="slots" id="stats-periods">${rows || '<li class="empty-wait">No hay partidos.</li>'}</ul>`;
+    // v240: los meses anteriores se piden de a uno, solo si se tocan.
+    const older = grain === 'month' && app.store?.loadStatsRange
+      ? `<p><button type="button" class="btn" id="stats-older" data-stats-older="1">Ver mes anterior</button></p>`
+      : '';
+    return `<ul class="slots" id="stats-periods">${rows || '<li class="empty-wait">No hay partidos.</li>'}</ul>${older}`;
   }
   const bucket = buckets.find((item) => item.key === id);
   if (!bucket) return `<div class="empty"><p><b>No hay datos de ese período.</b></p><p><a class="btn" href="${statsHash(mode)}">Volver a la lista</a></p></div>`;
@@ -8324,8 +8400,9 @@ async function markPaidNoPlay(m, p) {
       await app.store.promoteFromWaiting(top.id);
       await applyAutoCredit(top.id);
       await offerPromotionWhatsApp(top, m);
-    })();
-    run(job, promote ? `${top.name} pasó al partido` : `${shownName(p)} quedó en No jugó pero pagó`);
+    })().then(() => true);
+    run(job, promote ? `${top.name} pasó al partido` : `${shownName(p)} quedó en No jugó pero pagó`)
+      .then((ok) => { if (ok) openNoPlayPayment(m, p.id); });
   };
   if (!needsPromote) {
     closeSheet();
@@ -8333,6 +8410,16 @@ async function markPaidNoPlay(m, p) {
     return;
   }
   askYesNo(`¿Subir a ${top.name}, el primero de la lista de espera?`).then(go);
+}
+
+/**
+ * v239: al pasar a «No jugó pero pagó» se abre Cargar pago para anotar el
+ * efectivo o la transferencia. Si ya figura pagado, no hace falta.
+ */
+function openNoPlayPayment(m, playerId) {
+  const fresh = (app.players || []).find((item) => item.id === playerId);
+  if (!fresh || fresh.paid === true || sheet.open) return;
+  openPaymentForm(m, fresh);
 }
 
 async function restoreNoPlay(m, p) {
@@ -8803,7 +8890,11 @@ async function boot() {
   $('#btn-text-bigger').onclick = () => { stepTextSize(1); syncTextSize(); };
   syncTextSize();
   $('#btn-settings').onclick = () => { if (app.session?.user) openSettings(); };
-  $('#brand').onclick = () => { if (!app.session?.user) return; location.hash = '#/'; };
+  $('#brand').onclick = (e) => {
+    if (!app.session?.user) return;
+    if (e.target.closest?.('img')) { brandIconTap(); return; }
+    location.hash = '#/';
+  };
 
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((reg) => {
@@ -8858,14 +8949,16 @@ async function boot() {
     app.uid = app.session.user.uid;
     app.users = app.session.users || [];
     app.store = await createStore((e) => {
-      showError(isPermissionDenied(e)
-        ? RULES_MSG
-        : e?.code === 'no-server'
-          ? 'No hay conexión con la base de datos de Firebase: los cambios quedan solo en este teléfono. ¿Está creada la base Firestore del proyecto? (ver README)'
-          : 'Problema de conexión con Firebase: ' + (e?.message || e));
+      // v240 (pedidos 5 y 15): el detalle, solo para el admin.
+      showConnectionNotice(e);
     });
     $('#demo-banner').hidden = app.store.mode === 'firebase';
     app.store.setActor(app.session.user);
+    if (app.store.mode === 'firebase') {
+      const offline = () => { if (app.session?.user) showConnectionNotice({ code: 'offline' }); };
+      window.addEventListener('offline', offline);
+      if (navigator.onLine === false) offline();
+    }
   } else {
     lockShell();
     document.documentElement.classList.add('anon-lock');
@@ -8883,6 +8976,10 @@ async function boot() {
     app.historyMeta = historyMeta || null;
     app.historyError = historyError || '';
     app.historyHasMore = view.historyHasMore === true;
+    app.statsMatches = Array.isArray(view.statsMatches) ? view.statsMatches : [];
+    app.statsPlayers = Array.isArray(view.statsPlayers) ? view.statsPlayers : [];
+    app.statsLoading = view.statsLoading === true;
+    app.statsError = view.statsError || '';
     app.historyLoading = view.historyLoading === true;
     app.rosterWatch = view.rosterWatch || [];
     app.rosterCovered = view.rosterCovered || [];
@@ -8915,16 +9012,17 @@ async function boot() {
     }
     app.log = view.log || [];
     app.logError = view.logError || '';
-    if (!app.guestPlayer && rosterError && rosterError !== app.rosterError) showError(rosterError);
+    if (!app.guestPlayer) clearConnectionNotice(view);
+    if (!app.guestPlayer && rosterError && rosterError !== app.rosterError) showError(adminOnlyDetail(rosterError, isAdminUser()));
     app.rosterError = rosterError || null;
-    if (!app.guestPlayer && organizersError && organizersError !== app.organizersError) showError(organizersError);
+    if (!app.guestPlayer && organizersError && organizersError !== app.organizersError) showError(adminOnlyDetail(organizersError, isAdminUser()));
     app.organizersError = organizersError || null;
-    if (!app.guestPlayer && venuesError && venuesError !== app.venuesError) showError(venuesError);
+    if (!app.guestPlayer && venuesError && venuesError !== app.venuesError) showError(adminOnlyDetail(venuesError, isAdminUser()));
     app.venuesError = venuesError || null;
-    if (!app.guestPlayer && pricesError && pricesError !== app.pricesError) showError(pricesError);
+    if (!app.guestPlayer && pricesError && pricesError !== app.pricesError) showError(adminOnlyDetail(pricesError, isAdminUser()));
     app.pricesError = pricesError || null;
     app.loaded = true;
-    const stamp = JSON.stringify([app.matches, app.players, app.history, app.historyMeta, app.historyError, app.historyHasMore, app.historyLoading, app.rosterWatch, app.rosterCovered, app.rosterDates, app.roster, app.suspensions, app.suspensionHistory, app.payBatches, app.behavior, app.organizers, app.venues, app.prices, app.credits, app.compensations, app.log, app.logError, app.rosterError, app.organizersError, app.venuesError, app.pricesError, app.creditsError, app.confirmSeen, app.guestMatchError]);
+    const stamp = JSON.stringify([app.matches, app.players, app.history, app.historyMeta, app.historyError, app.historyHasMore, app.historyLoading, app.rosterWatch, app.rosterCovered, app.rosterDates, app.roster, app.suspensions, app.suspensionHistory, app.payBatches, app.behavior, app.organizers, app.venues, app.prices, app.credits, app.compensations, app.log, app.logError, app.rosterError, app.organizersError, app.venuesError, app.pricesError, app.creditsError, app.confirmSeen, app.guestMatchError, app.statsMatches, app.statsPlayers, app.statsLoading, app.statsError]);
     const changed = stamp !== app.viewStamp;
     app.viewStamp = stamp;
     scheduleRetroactiveAutoCredit();
