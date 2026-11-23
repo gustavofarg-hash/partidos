@@ -723,13 +723,16 @@ test('el nivel acepta un solo decimal y lo muestra con coma', () => {
 test('no se anota dos veces y Amigo N es de quien invita', () => {
   const mates = [
     { id: 'juan', name: 'Juan Pérez', phone: '5491112345678', rosterId: 'r-juan' },
-    { id: 'nico', name: 'Nico', phone: '5491112345678', rosterId: 'r-nico' },
+    { id: 'nico', name: 'Nico', phone: '5491187654321', rosterId: 'r-nico' },
     { id: 'a1', name: 'Amigo 1', invitedBy: 'juan', invitedByName: 'Juan Pérez' },
   ];
   assert.equal(alreadyInMatch(mates, { name: 'juan perez' })?.id, 'juan');
   assert.equal(alreadyInMatch(mates, { name: 'Juan Pérez', phone: '5491199990000' }), null);
-  assert.equal(alreadyInMatch(mates, { name: 'Nico', phone: '5491112345678', rosterId: 'r-nico' })?.id, 'nico');
-  assert.equal(alreadyInMatch(mates, { name: 'Otra', phone: '5491112345678', rosterId: 'r-otra' }), null);
+  assert.equal(alreadyInMatch(mates, { name: 'Nico', phone: '5491187654321', rosterId: 'r-nico' })?.id, 'nico');
+  // Un teléfono es una sola persona: otra ficha con el número de Juan no entra.
+  assert.equal(alreadyInMatch(mates, { name: 'Otra', phone: '5491112345678', rosterId: 'r-otra' })?.id, 'juan');
+  assert.equal(alreadyInMatch(mates, { name: 'Otra', phone: '5491112345678', rosterId: 'r-otra' }, { roster: false })?.id, 'juan');
+  assert.equal(alreadyInMatch(mates, { name: 'Otra', phone: '5491100001111', rosterId: 'r-otra' }), null);
   assert.equal(alreadyInMatch(mates, { name: 'Amigo 1', guestAuto: true, invitedBy: 'nuevo' }), null);
   assert.equal(alreadyInMatch(mates, { name: 'Amigo 1' })?.id, 'a1');
   assert.equal(alreadyInMatch(mates, { name: 'Pedro', phone: '5491155550181' }, { exceptId: 'a1' }), null);

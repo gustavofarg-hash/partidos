@@ -1,6 +1,6 @@
 // Amigos de un jugador y la regla de no anotar dos veces al mismo en un partido.
-// Puro: no escribe en Firestore. El id del documento sigue siendo aleatorio
-// (los partidos viejos ya están así). La repetición se frena en el cliente.
+// Puro: no escribe en Firestore. El organizador frena la repetición en el
+// cliente; el Autoservicio además usa un id fijo por partido y ficha.
 import { cleanShortName, foldText, guestHostKey, isNamedGuest, phoneIdentity } from './roster.js';
 
 export const ALREADY_IN_MATCH = 'Ya está anotado en este partido';
@@ -83,9 +83,9 @@ export function isGenericGuest(player) {
 
 /**
  * ¿Esta persona ya está en el partido, titular o en espera?
- * Manda el id del plantel. Si no, el nombre normalizado.
- * Con teléfono en los dos, un número distinto es otra persona
- * (Juan y Nico comparten línea a propósito: el teléfono solo no alcanza).
+ * Manda el id del plantel. Después el teléfono: un número es una sola persona,
+ * así que dos jugadores con el mismo teléfono no pueden estar en el mismo partido.
+ * Si no, el nombre normalizado; con teléfono en los dos, un número distinto es otra persona.
  * "Invitado N" (o "Amigo N") automático no choca con otro igual: es de quien invita.
  * Un nombre escrito a mano, aunque sea "Amigo 1", sí choca.
  */
@@ -101,13 +101,50 @@ export function alreadyInMatch(players, candidate, { roster = true, exceptId = '
     // El plantel junta por teléfono. Juan y Nico comparten línea y son dos
     // jugadores: el id solo cuenta si también se pide (el selector de guardados).
     if (roster && rosterId && otherRoster && rosterId === otherRoster) return player;
+    const otherPhone = phoneIdentity(player);
+    if (phone && otherPhone && phone === otherPhone) return player;
     if (generic && isAutoGuestName(name)) continue;
     if (!name || name !== normName(player?.name)) continue;
-    const otherPhone = phoneIdentity(player);
     if (phone && otherPhone && phone !== otherPhone) continue;
     return player;
   }
   return null;
+}
+
+export const PHONE_TAKEN_PREFIX = 'Ese número ya está anotado en este partido';
+
+/**
+ * «Ese número ya está anotado en este partido como Juan (lo anotó Martín).»
+ * Cada organizador puede tener a la misma persona con otro nombre.
+ */
+export function phoneTakenText(name, by = '') {
+  const who = String(name || '').trim();
+  const adder = String(by || '').trim();
+  const as = who ? ` como ${who}` : '';
+  const note = adder ? ` (lo anotó ${adder})` : '';
+  return `${PHONE_TAKEN_PREFIX}${as}${note}.`;
+}
+
+/**
+ * Texto para el organizador cuando alreadyInMatch encontró a alguien.
+ * Si el número coincide y no es la misma ficha, dice con qué nombre está y quién lo anotó.
+ */
+export function duplicateText(hit, candidate) {
+  if (!hit) return '';
+  const phone = phoneIdentity(candidate || {});
+  const other = phoneIdentity(hit);
+  const rosterId = String(candidate?.rosterId || '').trim();
+  const sameRoster = !!rosterId && rosterId === String(hit?.rosterId || '').trim();
+  if (phone && other && phone === other && !sameRoster) {
+    return phoneTakenText(hit?.name, hit?.signedUpWithName || hit?.addedBy || '');
+  }
+  return ALREADY_IN_MATCH;
+}
+
+/** El texto es uno de los de «ya está anotado». */
+export function isDuplicateText(text) {
+  const value = String(text || '');
+  return value === ALREADY_IN_MATCH || value.startsWith(PHONE_TAKEN_PREFIX);
 }
 
 /** El primero del grupo que ya está. Cada uno se suma para el que sigue. */

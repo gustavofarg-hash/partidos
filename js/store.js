@@ -102,7 +102,7 @@ import { bumpGoals, bumpScore, dropPlayer, nextInGoalAt, scoreRecord, teamsRecor
 import { confirmationIdentity, confirmationRecord, newConfirmToken, overlayConfirmations, upcomingConfirmSlots } from './reminders.js';
 import { isShortCode, newShortCode } from './short.js';
 import { acceptedExternalShort } from './shorten.js';
-import { ALREADY_IN_MATCH, ALREADY_SIGNED_UP, alreadyInMatch, selfAlreadyInMatch, selfSignupPlayerId, inviteBlock, isAutoGuestName, sameDayPromoGuestEditPatches, sameDayPromoGuestNickPatches } from './guests.js';
+import { ALREADY_IN_MATCH, ALREADY_SIGNED_UP, alreadyInMatch, duplicateText, selfAlreadyInMatch, selfSignupPlayerId, inviteBlock, isAutoGuestName, sameDayPromoGuestEditPatches, sameDayPromoGuestNickPatches } from './guests.js';
 import { EVERYONE, accessPatch, canAdd, canView, playerAccess } from './access.js';
 import { ROSTER_DENIED_READ, SUSPENDED_TEXT, blockingSuspensions, capitalizeWords, cleanShortName, cleanSuspensionHistory, cleanSuspensionNote, isRosterDenied, legacyNoteOwnerUid, liftedSuspensionEvent, personKey, phoneIdentity, rosterHeldBy, rosterHolderIds, rosterIdForSuspension, rosterNoteDocId, rosterPhoneAction, suspensionDocId, withHolder } from './roster.js';
 import { PRIVATE_WA_TEXT, attachPhone, canonicalWa, phoneKey } from './privacy.js';
@@ -241,7 +241,7 @@ function refuseSelfDuplicate(mates, person) {
 function refuseDuplicate(mates, data, exceptId = '') {
   const name = String(data?.name || '').trim();
   const invitedBy = String(data?.invitedBy || '').trim();
-  if (alreadyInMatch(mates, {
+  const candidate = {
     name,
     phone: data?.phone || '',
     phoneKey: data?.phoneKey || '',
@@ -249,8 +249,10 @@ function refuseDuplicate(mates, data, exceptId = '') {
     hasPhone: data?.hasPhone === true,
     invitedBy,
     guestAuto: data?.guestAuto === true,
-  }, { roster: false, exceptId })) {
-    throw Object.assign(new Error(ALREADY_IN_MATCH), { code: 'already-in-match' });
+  };
+  const hit = alreadyInMatch(mates, candidate, { roster: false, exceptId });
+  if (hit) {
+    throw Object.assign(new Error(duplicateText(hit, candidate) || ALREADY_IN_MATCH), { code: 'already-in-match' });
   }
 }
 
