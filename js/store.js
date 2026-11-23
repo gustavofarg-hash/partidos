@@ -99,6 +99,7 @@ import { nextWaitOrder } from './waiting.js';
 import { canSelfCancel, isSelfPending, occupiesSpot, signupLimitFrom, signupLimitRecord, signupRateDecision } from './self-signup.js';
 import { tokenDocId } from './push.js';
 import { newShareToken } from './share.js';
+import { canResetLink, isLinkKey, linkKeyTargets, newLinkKey, rosterMirror, sameMirror } from './link-reset.js';
 import { bumpGoals, bumpScore, dropPlayer, nextInGoalAt, scoreRecord, teamsRecord } from './teams.js';
 import { confirmationIdentity, confirmationRecord, newConfirmToken, overlayConfirmations, upcomingConfirmSlots } from './reminders.js';
 import { isShortCode } from './short.js';
@@ -979,6 +980,7 @@ class LocalStore {
       ...signupWith(data, this.actor),
       ...(cleanShortName(data.shortName) ? { shortName: cleanShortName(data.shortName) } : {}),
       ...(selfHold || opts.selfSignup === true ? { selfSignup: true } : {}),
+      ...(rosterId && db.rosterLocks?.[rosterId]?.key ? { linkKey: db.rosterLocks[rosterId].key } : {}),
     };
     db.players[id] = player;
     const person = playerLogFields({ id, ...player }, [...mates, { id, ...player }]);
@@ -1099,6 +1101,37 @@ class LocalStore {
     this._save(db);
   }
   watchConfirmSeen() {}
+  // v237 (demo): la clave vive en el mismo localStorage.
+  rosterLinkKey(rosterId) {
+    return String(this._load().rosterLocks?.[String(rosterId || '')]?.key || '');
+  }
+  async resetPlayerLink(rosterId) {
+    const id = String(rosterId || '').trim();
+    const db = this._load();
+    if (!id || !db.roster?.[id]) throw Object.assign(new Error('Este jugador no está en Jugadores.'), { code: 'no-roster' });
+    const key = newLinkKey();
+    db.rosterLocks ||= {};
+    db.rosterLocks[id] = { key, at: Date.now(), by: this.actor?.uid || '', byName: this.actor?.name || '' };
+    const rows = Object.entries(db.players || {}).map(([pid, row]) => ({ id: pid, ...row }));
+    const targets = linkKeyTargets(rows, id, key, todayISO());
+    for (const pid of targets) db.players[pid].linkKey = key;
+    this._save(db);
+    return { key, updated: targets.length, missed: 0 };
+  }
+  setGuestLink(rosterId, linkKey) {
+    this._guestLink = { id: String(rosterId || ''), key: String(linkKey || '') };
+  }
+  listenAsGuest(rosterId, shareToken = '', linkKey = '') {
+    this.setGuestLink(rosterId, linkKey);
+    this._emit();
+  }
+  /** Sin sesión: el link de una ficha reseteada sin la clave vigente. */
+  get linkInvalid() {
+    const link = this._guestLink;
+    if (!link?.id || this.actor?.uid) return false;
+    const lock = this._load().rosterLocks?.[link.id];
+    return !!lock && lock.key !== link.key;
+  }
   shareOrganizer(token) {
     const id = String(token || '').trim();
     const row = this._load().shareTokens?.[id];
@@ -2458,6 +2491,7 @@ export class FirebaseStore {
     await this._refreshIdToken();
     this._guestRosterId = String(opts.guestRosterId || '').trim();
     this._shareToken = String(opts.shareToken || '').trim();
+    this._linkKey = String(opts.linkKey || '').trim();
     if (this._guestRosterId) {
       this._guest = true;
       // Un fallo al armar las escuchas no puede tirar Firebase abajo: si no,
@@ -2537,14 +2571,97 @@ export class FirebaseStore {
   _takeMatchSnap(snap) {
     return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
   }
-  listenAsGuest(rosterId, shareToken = '') {
+  listenAsGuest(rosterId, shareToken = '', linkKey = '') {
     const id = String(rosterId || '').trim();
     const token = String(shareToken || '').trim();
+    const key = String(linkKey || '').trim();
     if (!id || !this.fs) return;
-    if (this._guest && this._guestRosterId === id && String(this._shareToken || '') === token && this._unsubs?.length) return;
+    if (this._guest && this._guestRosterId === id && String(this._shareToken || '') === token
+      && String(this._linkKey || '') === key && this._unsubs?.length) return;
     this._guest = true;
     this._shareToken = token;
+    this._linkKey = key;
     this._listenGuest(id);
+  }
+  /** v237: la clave del link, solo sin sesión. Con ella, cada escritura lleva la prueba. */
+  _guestLinkKey() {
+    if (!this._guest || this.actor?.uid) return '';
+    return isLinkKey(this._linkKey) ? this._linkKey : '';
+  }
+  /** Prueba de la clave vigente en el mismo lote o transacción (las reglas la exigen con la ficha reseteada). */
+  _addLinkProof(writer, rosterId) {
+    const key = this._guestLinkKey();
+    const id = String(rosterId || this._guestRosterId || '');
+    if (!key || !id) return false;
+    const { doc, serverTimestamp } = this.fs;
+    writer.set(doc(this.db, 'linkProofs', id, 'k', key), { at: serverTimestamp() });
+    return true;
+  }
+  /** Una escritura sin sesión: con clave va en lote con la prueba; sin clave, como siempre. */
+  async _guestSet(ref, data, rosterId) {
+    if (!this._guestLinkKey()) {
+      const { setDoc } = this.fs;
+      return setDoc(ref, data);
+    }
+    const { writeBatch } = this.fs;
+    const batch = writeBatch(this.db);
+    batch.set(ref, data);
+    this._addLinkProof(batch, rosterId);
+    return batch.commit();
+  }
+  /** Staff: clave vigente de la ficha (vacío si nunca se reseteó). */
+  rosterLinkKey(rosterId) {
+    return String(this.state.rosterLocks?.[String(rosterId || '')] || '');
+  }
+  async resetPlayerLink(rosterId) {
+    const id = String(rosterId || '').trim();
+    const person = (this.state.roster || []).find((row) => row.id === id);
+    if (!id || !person) throw Object.assign(new Error('Este jugador no está en Jugadores.'), { code: 'no-roster' });
+    const { doc, writeBatch, updateDoc, deleteDoc } = this.fs;
+    const key = newLinkKey();
+    const before = this.rosterLinkKey(id);
+    const now = Date.now();
+    const me = this._actor();
+    const batch = writeBatch(this.db);
+    batch.set(doc(this.db, 'rosterLocks', id), { key, at: now, by: me.uid, byName: String(me.name || '').slice(0, 60) });
+    batch.set(doc(this.db, 'rosterLinks', id), { locked: true, at: now });
+    batch.set(doc(this.db, 'rosterLinks', id, 'k', key), rosterMirror(person));
+    await batch.commit();
+    this.state.rosterLocks = { ...(this.state.rosterLocks || {}), [id]: key };
+    this._mirrorSeen = { ...(this._mirrorSeen || {}), [id]: { key, person: rosterMirror(person) } };
+    if (before && before !== key) {
+      try { await deleteDoc(doc(this.db, 'rosterLinks', id, 'k', before)); } catch { /* la regla ya la niega por clave */ }
+    }
+    // Las anotaciones desde hoy pasan a la clave nueva: así las ve el link nuevo.
+    let updated = 0;
+    let missed = 0;
+    for (const pid of linkKeyTargets(this.state.players, id, key, todayISO())) {
+      try {
+        await updateDoc(doc(this.db, 'players', pid), { linkKey: key });
+        updated += 1;
+      } catch (error) {
+        if (!permissionDenied(error)) throw error;
+        missed += 1;
+      }
+    }
+    this._emit();
+    return { key, updated, missed };
+  }
+  /** Staff: si cambió el nombre o la guardia de una ficha reseteada, se actualiza lo que ve el link. */
+  async _syncLinkMirrors() {
+    if (this._guest || !this.fs || !this.actor?.uid) return;
+    const locks = this.state.rosterLocks || {};
+    const seen = this._mirrorSeen || (this._mirrorSeen = {});
+    const { doc, setDoc } = this.fs;
+    for (const [id, key] of Object.entries(locks)) {
+      const person = (this.state.roster || []).find((row) => row.id === id);
+      if (!person || !canResetLink(person, this.actor)) continue;
+      const last = seen[id];
+      if (last && last.key === key && sameMirror(last.person, person)) continue;
+      seen[id] = { key, person: rosterMirror(person) };
+      try { await setDoc(doc(this.db, 'rosterLinks', id, 'k', key), rosterMirror(person)); }
+      catch (error) { console.error(error?.code || 'sin-codigo', error); delete seen[id]; }
+    }
   }
   shareOrganizer(token) {
     const id = String(token || '').trim();
@@ -2588,7 +2705,10 @@ export class FirebaseStore {
       this.state.playersReady = true;
       this._emit();
     };
-    const plan = guestListenPlan({ rosterId: id, today });
+    // v237: con el link reseteado, la clave del link filtra cada consulta de la ficha.
+    const linkKey = this._guestLinkKey();
+    this.linkInvalid = false;
+    const plan = guestListenPlan({ rosterId: id, today, linkKey });
     this.state.guestMatchError = '';
     this._guestBuckets = { open: [], link: [], openPlayers: [], linkPlayers: [] };
     let armedFor = null;
@@ -2609,7 +2729,7 @@ export class FirebaseStore {
       const key = `${organizerUid}|${token}`;
       if (armedFor === key && this._named?.['guest-matches']) return;
       armedFor = key;
-      const plan = guestListenPlan({ rosterId: id, today, organizerUid, shareToken: token });
+      const plan = guestListenPlan({ rosterId: id, today, organizerUid, shareToken: token, linkKey });
       const visible = (snap) => rows(snap);
       const onMatches = (snap) => {
         this._guestBuckets.open = visible(snap);
@@ -2620,7 +2740,7 @@ export class FirebaseStore {
       };
       const onMatchesError = (error) => {
         if (error?.code === 'failed-precondition' && organizerUid) {
-          const fallback = guestListenPlan({ rosterId: id, today, organizerUid: '', shareToken: token });
+          const fallback = guestListenPlan({ rosterId: id, today, organizerUid: '', shareToken: token, linkKey });
           this._swap('guest-matches', onSnapshot(this._queryFromPlan({
             ...fallback.matches,
             filters: [{ field: 'createdByUid', op: '==', value: organizerUid }, ...fallback.matches.filters],
@@ -2683,18 +2803,31 @@ export class FirebaseStore {
       this.state.shareOrganizer = null;
       armMatches('');
     }
-    this._swap('guest-roster', onSnapshot(doc(this.db, 'roster', id), (snap) => {
-      const data = snap.exists() ? snap.data() : null;
-      this.state.roster = data ? [{ id: snap.id, ...data }] : [];
-      this.state.rosterError = null;
-      seen.roster = true;
-      publish();
-    }, () => {
+    const noRoster = () => {
       this.state.roster = [];
       this.state.rosterError = null;
       seen.roster = true;
       publish();
-    }));
+    };
+    // Sin la ficha: si la ficha se reseteó, el link es viejo (o la clave no es la vigente).
+    const rosterDenied = async () => {
+      try {
+        const { getDoc } = this.fs;
+        const flag = await getDoc(doc(this.db, 'rosterLinks', id));
+        if (flag.exists() && flag.data()?.locked === true) this.linkInvalid = true;
+      } catch { /* sin el aviso: «NO TENÉS ACCESO» */ }
+      noRoster();
+    };
+    const rosterRef = linkKey ? doc(this.db, 'rosterLinks', id, 'k', linkKey) : doc(this.db, 'roster', id);
+    this._swap('guest-roster', onSnapshot(rosterRef, (snap) => {
+      const data = snap.exists() ? snap.data() : null;
+      if (!data && linkKey) { void rosterDenied(); return; }
+      this.linkInvalid = false;
+      this.state.roster = data ? [{ id, ...data }] : [];
+      this.state.rosterError = null;
+      seen.roster = true;
+      publish();
+    }, () => { void rosterDenied(); }));
     this._seenRoster = id;
     this._swap('guest-seen', onSnapshot(this._queryFromPlan(plan.seen), (snap) => {
       this.state.confirmSeen = snap.docs.filter((item) => item.data()?.seen === true).map((item) => item.id);
@@ -3404,9 +3537,23 @@ export class FirebaseStore {
       this._migrateContacts();
       this._claimLegacyNotes();
       this._rehomeNotes();
+      void this._syncLinkMirrors();
     }, (e) => {
       this.state.rosterError = isRosterDenied(e) ? ROSTER_DENIED_READ : ('No se pudo leer Jugadores: ' + (e?.message || e?.code || e));
       this._emit();
+    });
+    // v237: claves de los links reseteados (solo organizadores).
+    watch('roster-locks', collection(this.db, 'rosterLocks'), null, (snap) => {
+      const map = {};
+      snap.docs.forEach((item) => {
+        const key = item.data()?.key;
+        if (isLinkKey(key)) map[item.id] = key;
+      });
+      this.state.rosterLocks = map;
+      this._emit();
+      void this._syncLinkMirrors();
+    }, () => {
+      this.state.rosterLocks = {};
     });
     if (uid) {
       watch('roster-notes', query(collection(this.db, 'rosterNotes'), where('ownerUid', '==', uid)), null, (snap) => {
@@ -3662,10 +3809,10 @@ export class FirebaseStore {
   }
   async _appendLogs(entries) {
     if (!this.fs || !entries?.length) return;
-    const { doc, setDoc } = this.fs;
+    const { doc } = this.fs;
     for (const entry of entries) {
       if (!entry?.type || (!entry.actorUid && !entry.actorName)) continue;
-      await setDoc(doc(this.db, 'log', rid()), entry);
+      await this._guestSet(doc(this.db, 'log', rid()), entry, entry.rosterId);
     }
   }
   async addMatch(data, who) {
@@ -3874,6 +4021,7 @@ export class FirebaseStore {
       ...(cleanShortName(data.shortName) ? { shortName: cleanShortName(data.shortName) } : {}),
       ...(selfHold || opts.selfSignup === true ? { selfSignup: true } : {}),
       ...(linkToken ? { shareToken: linkToken } : {}),
+      ...(rosterId && this.rosterLinkKey(rosterId) ? { linkKey: this.rosterLinkKey(rosterId) } : {}),
     };
     // v233: con teléfono, el jugador y su guardia van en el mismo lote.
     const guardKey = guardKeyFor(player, this._rosterPhoneKey(rosterId));
@@ -3952,7 +4100,10 @@ export class FirebaseStore {
   async _selfPhoneTaken(matchId, rosterId) {
     const { doc, getDoc } = this.fs;
     try {
-      await getDoc(doc(this.db, 'phoneChecks', matchId, 'rosters', rosterId));
+      const key = this._guestLinkKey();
+      await getDoc(key
+        ? doc(this.db, 'phoneChecks', matchId, 'rosters', rosterId, 'k', key)
+        : doc(this.db, 'phoneChecks', matchId, 'rosters', rosterId));
       return false;
     } catch (error) {
       if (permissionDenied(error)) return true;
@@ -4044,6 +4195,7 @@ export class FirebaseStore {
         count: next.count,
         lastId: playerId,
       });
+      this._addLinkProof(tx, rosterId);
     });
   }
   async selfJoin(match, person, { waiting = false, organizer = null } = {}) {
@@ -4082,8 +4234,11 @@ export class FirebaseStore {
     return playerId;
   }
   async _writeSignupPing(kind, player, match, organizer) {
-    const { collection, addDoc } = this.fs;
-    await addDoc(collection(this.db, 'signupPings'), {
+    const { collection, addDoc, doc } = this.fs;
+    const write = this._guestLinkKey()
+      ? (data) => this._guestSet(doc(collection(this.db, 'signupPings')), data, data.rosterId)
+      : (data) => addDoc(collection(this.db, 'signupPings'), data);
+    await write({
       kind,
       name: String(player?.name || '').slice(0, 60),
       playerId: String(player?.id || ''),
@@ -4109,16 +4264,17 @@ export class FirebaseStore {
     const owner = String(rosterId || '').trim();
     const id = tokenDocId(owner, token);
     if (!id) return '';
-    const { doc, setDoc } = this.fs;
-    await setDoc(doc(this.db, 'playerTokens', id), { rosterId: owner, token: String(token), updatedAt: Date.now() });
+    const { doc } = this.fs;
+    await this._guestSet(doc(this.db, 'playerTokens', id), { rosterId: owner, token: String(token), updatedAt: Date.now() }, owner);
     return id;
   }
   async markConfirmSeen(playerId, rosterId) {
     const id = String(playerId || '').trim();
     const owner = String(rosterId || '').trim();
     if (!id || !owner) return;
-    const { doc, setDoc } = this.fs;
-    await setDoc(doc(this.db, 'confirmSeen', id), { rosterId: owner, seen: true });
+    const { doc } = this.fs;
+    const key = this._guestLinkKey();
+    await this._guestSet(doc(this.db, 'confirmSeen', id), { rosterId: owner, seen: true, ...(key ? { linkKey: key } : {}) }, owner);
     this.state.confirmSeen = [...new Set([...(this.state.confirmSeen || []), id])];
     this._emit();
   }
@@ -4206,6 +4362,10 @@ export class FirebaseStore {
       viewers: access.viewers,
       adders: access.adders,
     };
+    // v237: con el link reseteado, la fila lleva la clave: las reglas la comparan con la
+    // vigente (el alta no lleva la prueba aparte) y la lista del link nuevo la ve.
+    const linkKey = this._guestLinkKey();
+    if (linkKey) player.linkKey = linkKey;
     const { doc, setDoc } = this.fs;
     // v233: el número de la ficha no puede estar dos veces en el partido.
     const guardKey = guardKeyFor(player, String(person?.phoneKey || '') || this._rosterPhoneKey(rosterId));
@@ -4237,11 +4397,13 @@ export class FirebaseStore {
     }
     await this._chargeSignupRate(player.rosterId || playerId, playerId);
     const { doc, deleteDoc, writeBatch } = this.fs;
+    const proved = !!this._guestLinkKey();
     await this._deleteWithGuard(async (gid) => {
-      if (!gid) return deleteDoc(doc(this.db, 'players', playerId));
+      if (!gid && !proved) return deleteDoc(doc(this.db, 'players', playerId));
       const batch = writeBatch(this.db);
       batch.delete(doc(this.db, 'players', playerId));
-      batch.delete(doc(this.db, GUARD_COLLECTION, gid));
+      if (gid) batch.delete(doc(this.db, GUARD_COLLECTION, gid));
+      this._addLinkProof(batch, player.rosterId);
       return batch.commit();
     }, player);
     this.state.players = this.state.players.filter((row) => row.id !== playerId);
@@ -5271,5 +5433,7 @@ export async function createStore(onError, opts) {
     try { await s.init(onError, opts); return s; }
     catch (e) { console.error('No se pudo iniciar Firebase, usando modo demo', e); onError && onError(e); }
   }
-  const s = new LocalStore(); await s.init(); return s;
+  const s = new LocalStore(); await s.init();
+  if (opts?.guestRosterId) s.setGuestLink(opts.guestRosterId, opts.linkKey);
+  return s;
 }

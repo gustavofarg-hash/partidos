@@ -50,7 +50,7 @@ try {
   check('Perfil: los tres puntos quedan a la derecha de compartir', order.join(',') === 'section,profile-share,more-wrap', order.join(','));
   check('El menú arranca cerrado', await page.$eval('#profile-more-menu', (el) => el.hidden));
   await page.click('#profile-more');
-  check('Perfil: Compartir link, Cargar Crédito y Devolver Crédito (deshabilitado con $0)', (await items('profile-more')) === 'Compartir link | Cargar Crédito | Devolver Crédito (deshabilitado)', await items('profile-more'));
+  check('Perfil: Resetear link, Compartir link, Cargar Crédito y Devolver Crédito (deshabilitado con $0)', (await items('profile-more')) === '🔃 Resetear link | Compartir link | Cargar Crédito | Devolver Crédito (deshabilitado)', await items('profile-more'));
   await page.mouse.click(20, 780);
   check('Tocar afuera lo cierra', await page.$eval('#profile-more-menu', (el) => el.hidden));
   await page.click('#profile-more');
@@ -72,7 +72,7 @@ try {
   await page.waitForFunction(() => !document.querySelector('dialog.sheet[open] input[name="amount"]'));
   await page.waitForFunction(() => !document.querySelector('#profile-more-menu [data-more="refund"]')?.disabled);
   await page.click('#profile-more');
-  check('Con crédito, Devolver Crédito se habilita', (await items('profile-more')) === 'Compartir link | Cargar Crédito | Devolver Crédito', await items('profile-more'));
+  check('Con crédito, Devolver Crédito se habilita', (await items('profile-more')) === '🔃 Resetear link | Compartir link | Cargar Crédito | Devolver Crédito', await items('profile-more'));
   await page.click('#profile-more-menu [data-more="refund"]');
   await page.waitForSelector('dialog.sheet[open]');
   check('Devolver Crédito abre la misma hoja de siempre', (await page.locator('dialog.sheet[open] h3').first().innerText()).trim() === 'Devolver crédito');
@@ -86,7 +86,7 @@ try {
   const menuOrder = await page.evaluate(() => [...document.querySelector('dialog.sheet .name-share').children].map((el) => el.id || el.className || el.tagName.toLowerCase()));
   check('Menú del jugador: los tres puntos a la derecha de compartir', menuOrder.join(',').replace(/^[^,]*,/, 'h3,') === 'h3,pm-share,more-wrap', menuOrder.join(','));
   await page.click('#pm-more');
-  check('Menú del jugador: las tres opciones', (await items('pm-more')) === 'Compartir link | Cargar Crédito | Devolver Crédito', await items('pm-more'));
+  check('Menú del jugador: las cuatro opciones', (await items('pm-more')) === '🔃 Resetear link | Compartir link | Cargar Crédito | Devolver Crédito', await items('pm-more'));
   const box = await page.evaluate(() => { const r = document.querySelector('#pm-more-menu').getBoundingClientRect(); return { left: r.left, right: r.right, vw: innerWidth }; });
   check('El menú entra en la pantalla', box.left >= 0 && box.right <= box.vw, JSON.stringify(box));
   await page.focus('#pm-more-menu .more-item');

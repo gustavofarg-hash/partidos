@@ -117,6 +117,16 @@
       ]
     },
     {
+      "collectionGroup": "players",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "rosterId", "order": "ASCENDING" },
+        { "fieldPath": "linkKey", "order": "ASCENDING" },
+        { "fieldPath": "viewers", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "matchDate", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "log",
       "queryScope": "COLLECTION",
       "fields": [

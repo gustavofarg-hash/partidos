@@ -20,12 +20,16 @@ export function newShareToken() {
 /**
  * Enlace de un jugador. Con token, es el de ese organizador.
  * Sin token, el enlace viejo: #/jugador/{id}.
+ * v237: con el link reseteado va la clave al final: #/jugador/{id}/{token}/{clave}
+ * (sin token, «-» en su lugar).
  */
-export function playerLink(rosterId, organizerToken = '') {
+export function playerLink(rosterId, organizerToken = '', linkKey = '') {
   const id = String(rosterId || '').trim();
   if (!id) return '';
   const token = String(organizerToken || '').trim();
+  const key = String(linkKey || '').trim();
   const base = `${appInstallUrl()}#/jugador/${encodeURIComponent(id)}`;
+  if (key) return `${base}/${token ? encodeURIComponent(token) : '-'}/${encodeURIComponent(key)}`;
   return token ? `${base}/${encodeURIComponent(token)}` : base;
 }
 
@@ -33,11 +37,12 @@ function decodePart(value) {
   try { return decodeURIComponent(value); } catch { return value; }
 }
 
-/** { id, token } o null. El token falta en los enlaces de antes. */
+/** { id, token, key } o null. El token falta en los enlaces de antes; la clave, en los no reseteados. */
 export function playerLinkParts(hash) {
   const parts = String(hash || '').replace(/^#\/?/, '').split('/');
   if (parts[0] !== 'jugador' || !parts[1]) return null;
-  return { id: decodePart(parts[1]), token: parts[2] ? decodePart(parts[2]) : '' };
+  const token = parts[2] && parts[2] !== '-' ? decodePart(parts[2]) : '';
+  return { id: decodePart(parts[1]), token, key: parts[3] ? decodePart(parts[3]) : '' };
 }
 
 /** Hash de una ficha: #/jugador/{id} o #/jugador/{id}/{token}. Sin id no cuenta. */

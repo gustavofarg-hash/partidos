@@ -476,8 +476,11 @@ export function playerLinkKey(match, token) {
  * abiertos (viewers *). Los 14 días evitan que un tope se coma el fin de semana.
  * playerVisible no entra en la consulta: si falta, el partido se muestra.
  */
-export function guestListenPlan({ rosterId, today, organizerUid, shareToken } = {}) {
+export function guestListenPlan({ rosterId, today, organizerUid, shareToken, linkKey } = {}) {
   const id = String(rosterId || '').trim();
+  // v237: con el link reseteado, cada consulta de la ficha fija la clave vigente.
+  const key = String(linkKey || '').trim();
+  const keyFilter = key ? [{ field: 'linkKey', op: '==', value: key }] : [];
   const day = String(today || '');
   const end = day ? addDays(day, GUEST_HORIZON_DAYS) : '';
   const owner = String(organizerUid || '').trim();
@@ -515,6 +518,7 @@ export function guestListenPlan({ rosterId, today, organizerUid, shareToken } = 
       filters: [
         { field: 'shareToken', op: '==', value: token },
         { field: 'rosterId', op: '==', value: id },
+        ...keyFilter,
       ],
       orderBy: [],
       limit: null,
@@ -523,6 +527,7 @@ export function guestListenPlan({ rosterId, today, organizerUid, shareToken } = 
       collection: 'players',
       filters: [
         { field: 'rosterId', op: '==', value: id },
+        ...keyFilter,
         { field: 'viewers', op: 'array-contains', value: '*' },
         ...(day ? [{ field: 'matchDate', op: '>=', value: day }] : []),
         ...(end ? [{ field: 'matchDate', op: '<=', value: end }] : []),
@@ -532,7 +537,7 @@ export function guestListenPlan({ rosterId, today, organizerUid, shareToken } = 
     } : null,
     seen: id ? {
       collection: 'confirmSeen',
-      filters: [{ field: 'rosterId', op: '==', value: id }],
+      filters: [{ field: 'rosterId', op: '==', value: id }, ...keyFilter],
       limit: GUEST_PAGE,
     } : null,
   };
