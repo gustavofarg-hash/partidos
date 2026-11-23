@@ -112,7 +112,8 @@ service cloud.firestore {
           && resource.data.shareToken.matches('^[A-Za-z0-9_-]+$')
           && resource.data.rosterId is string
           && resource.data.rosterId.size() >= 16
-          && resource.data.rosterId.size() <= 80;
+          && resource.data.rosterId.size() <= 80
+          && linkListed(resource.data);
     }
     function isViewer(d) {
       return isPublic(d) || (d.viewers is list && (d.viewers.hasAny([request.auth.uid]) || d.get('createdByUid', '') == request.auth.uid));
@@ -694,10 +695,44 @@ service cloud.firestore {
           && request.time < r.windowStart + duration.value(signupWindowMinutes(), 'm');
     }
     // El id del enlace #/jugador/{id}. No se puede listar el plantel.
-    function guestRoster(rosterId) {
+    function guestRosterBase(rosterId) {
       return rosterId is string && rosterId.size() >= 16 && rosterId.size() <= 80
           && rosterId.matches('^[A-Za-z0-9]+$')
           && exists(/databases/$(database)/documents/roster/$(rosterId));
+    }
+    // v237: «Resetear link». Una ficha con rosterLocks/{id} solo se usa sin sesión
+    // con la clave vigente. Sin ese documento, todo sigue igual que antes.
+    function guestRoster(rosterId) {
+      return guestRosterBase(rosterId) && linkOpenNow(rosterId);
+    }
+    function lockPath(rosterId) {
+      return /databases/$(database)/documents/rosterLocks/$(rosterId);
+    }
+    // get() == null y no exists(): en el emulador, exists() + get() del mismo documento
+    // gastaba tanto que el alta a la espera pasaba el tope de 1000 expresiones.
+    function linkLocked(rosterId) {
+      return get(lockPath(rosterId)) != null;
+    }
+    function linkKeyOf(rosterId) {
+      return get(lockPath(rosterId)).data.key;
+    }
+    // Escritura sin sesión: el mismo pedido escribe linkProofs/{id}/k/{clave vigente}
+    // con la hora del pedido. Con una clave vieja esa escritura se niega.
+    function linkOpenNow(rosterId) {
+      return !linkLocked(rosterId)
+          || getAfter(/databases/$(database)/documents/linkProofs/$(rosterId)/k/$(linkKeyOf(rosterId))).data.at == request.time;
+    }
+    // Lista sin sesión: con la ficha reseteada, la consulta fija linkKey == clave vigente.
+    function linkListed(d) {
+      return !linkLocked(d.rosterId) || d.linkKey == linkKeyOf(d.rosterId);
+    }
+    function linkResetter(rosterId) {
+      return isAdmin()
+          || (isActiveStaff() && exists(/databases/$(database)/documents/roster/$(rosterId))
+              && rosterHolders(rosterId).hasAny([request.auth.uid]));
+    }
+    function isLinkKey(key) {
+      return key is string && key.matches('^[A-Za-z0-9_-]{16,80}$');
     }
     function rosterHolders(rosterId) {
       let d = rosterDoc(rosterId);
@@ -732,8 +767,10 @@ service cloud.firestore {
               || (m.get('adders', null) is list && m.adders.hasAny([d.addedByUid, '*'])));
     }
     function guestSignupShape(d) {
+      // v237: la fila lleva la clave vigente (linkKey); sin la prueba aparte,
+      // que no entraba en el tope de 1000 expresiones del alta a la espera.
       return d.selfSignup == true
-          && guestRoster(d.rosterId)
+          && guestRosterBase(d.rosterId) && linkListed(d)
           && d.name == rosterDoc(d.rosterId).get('name', '')
           && guestAddedBy(d)
           && selfMatchForHolder(d.matchId, d.rosterId)
@@ -758,7 +795,7 @@ service cloud.firestore {
       // campo y, si falta, la regla da error y niega igual. Cada nombre de la lista
       // cuenta para el tope de 1000 y la guardia de teléfono necesitaba ese lugar.
       return d.keys().hasAll(['tentative'])
-          && d.keys().hasOnly(['matchId', 'matchDate', 'name', 'rosterId', 'selfSignup', 'waiting', 'waitOrder', 'tentative', 'tentativeAt', 'rosterAt', 'addedByUid', 'addedBy', 'shareToken', 'createdAt', 'updatedAt', 'phone', 'hasPhone', 'phoneKey', 'phoneOwnerUid', 'phoneShared', 'confirmToken', 'viewers', 'adders', 'signedUpWith', 'signedUpWithName'])
+          && d.keys().hasOnly(['matchId', 'matchDate', 'name', 'rosterId', 'selfSignup', 'waiting', 'waitOrder', 'tentative', 'tentativeAt', 'rosterAt', 'addedByUid', 'addedBy', 'shareToken', 'createdAt', 'updatedAt', 'phone', 'hasPhone', 'phoneKey', 'phoneOwnerUid', 'phoneShared', 'confirmToken', 'viewers', 'adders', 'signedUpWith', 'signedUpWithName', 'linkKey'])
           && d.matchId is string && d.matchId.size() > 0 && d.matchId.size() <= 80
           && d.matchDate is string && d.matchDate.size() == 10
           && d.phone == ''
@@ -898,7 +935,7 @@ service cloud.firestore {
 
     function organizerSlotShape(d) {
       return d.keys().hasAll(['matchId', 'matchDate', 'name', 'addedBy', 'addedByUid', 'createdAt', 'updatedAt', 'viewers', 'adders'])
-          && d.keys().hasOnly(['matchId', 'matchDate', 'name', 'phone', 'addedBy', 'addedByUid', 'createdAt', 'updatedAt', 'waiting', 'waitOrder', 'rosterAt', 'confirmToken', 'hasPhone', 'phoneKey', 'phoneOwnerUid', 'phoneShared', 'viewers', 'adders', 'rosterId', 'signedUpWith', 'signedUpWithName', 'shortName', 'tentative', 'tentativeAt', 'selfSignup', 'invitedBy', 'invitedByName', 'guestAuto', 'shortCode', 'shareToken'])
+          && d.keys().hasOnly(['matchId', 'matchDate', 'name', 'phone', 'addedBy', 'addedByUid', 'createdAt', 'updatedAt', 'waiting', 'waitOrder', 'rosterAt', 'confirmToken', 'hasPhone', 'phoneKey', 'phoneOwnerUid', 'phoneShared', 'viewers', 'adders', 'rosterId', 'signedUpWith', 'signedUpWithName', 'shortName', 'tentative', 'tentativeAt', 'selfSignup', 'invitedBy', 'invitedByName', 'guestAuto', 'shortCode', 'shareToken', 'linkKey'])
           && d.matchId is string && d.matchId.size() > 0 && d.matchId.size() <= 80
           && d.matchDate is string && d.matchDate.size() == 10
           && d.name is string && d.name.size() > 0 && d.name.size() <= 60
@@ -931,7 +968,9 @@ service cloud.firestore {
 
     match /players/{playerId} {
       allow get: if isActiveStaff() && canReadListed(resource.data);
-      allow get: if resource.data.viewers.hasAny(['*']);
+      // v237: la fila de una ficha reseteada no se lee suelta sin sesión.
+      allow get: if resource.data.viewers.hasAny(['*'])
+          && (resource.data.get('rosterId', '') == '' || !linkLocked(resource.data.rosterId));
       allow list: if isActiveStaff() && resource.data.viewers.hasAny([request.auth.uid, '*']);
       // v232: sin sesión (o sin ser organizador activo) solo se listan las filas de UNA ficha:
       // la consulta tiene que fijar rosterId con == (o in). Así la página del jugador ve lo suyo
@@ -939,7 +978,8 @@ service cloud.firestore {
       allow list: if resource.data.viewers.hasAny(['*'])
           && resource.data.rosterId is string
           && resource.data.rosterId.size() >= 16
-          && resource.data.rosterId.size() <= 80;
+          && resource.data.rosterId.size() <= 80
+          && linkListed(resource.data);
       allow list: if guestSignupListed();
       allow create: if isActiveStaff()
           && organizerSlotShape(request.resource.data)
@@ -1031,12 +1071,20 @@ service cloud.firestore {
     }
     // El jugador pregunta si el número de SU ficha ya está en el partido, sin ver
     // la guardia: el get de este documento (que no existe) anda si está libre.
+    function phoneFreeFor(matchId, rosterId) {
+      return !isPhoneId(rosterPhoneKey(rosterId))
+          || !exists(guardPath(matchId, rosterPhoneKey(rosterId)))
+          || !guardLiveNow(get(guardPath(matchId, rosterPhoneKey(rosterId))).data);
+    }
     match /phoneChecks/{matchId}/rosters/{rosterId} {
-      allow get: if (guestRoster(rosterId) || holdsRoster(rosterId))
-          && (!isPhoneId(rosterPhoneKey(rosterId))
-              || !exists(guardPath(matchId, rosterPhoneKey(rosterId)))
-              || !guardLiveNow(get(guardPath(matchId, rosterPhoneKey(rosterId))).data));
+      allow get: if (guestRoster(rosterId) || holdsRoster(rosterId)) && phoneFreeFor(matchId, rosterId);
       allow list, write: if false;
+      // v237: la misma pregunta con la clave vigente de una ficha reseteada.
+      match /k/{key} {
+        allow get: if guestRosterBase(rosterId) && linkLocked(rosterId) && key == linkKeyOf(rosterId)
+            && phoneFreeFor(matchId, rosterId);
+        allow list, write: if false;
+      }
     }
 
     match /organizerTokens/{tokenId} {
@@ -1073,8 +1121,9 @@ service cloud.firestore {
       allow get: if guestRoster(resource.data.rosterId);
       allow list: if resource.data.rosterId is string
           && resource.data.rosterId.size() >= 16
-          && resource.data.rosterId.size() <= 80;
-      allow create: if request.resource.data.keys().hasOnly(['rosterId', 'seen'])
+          && resource.data.rosterId.size() <= 80
+          && linkListed(resource.data);
+      allow create: if request.resource.data.keys().hasOnly(['rosterId', 'seen', 'linkKey'])
           && request.resource.data.seen == true
           && guestRoster(request.resource.data.rosterId)
           && exists(/databases/$(database)/documents/players/$(playerId))
@@ -1137,6 +1186,43 @@ service cloud.firestore {
       allow read, update, delete: if isAdmin();
     }
 
+    // v237: «Resetear link». La clave vigente solo la leen los organizadores.
+    match /rosterLocks/{rosterId} {
+      allow get, list: if isActiveStaff();
+      allow create, update: if linkResetter(rosterId)
+          && request.resource.data.keys().hasOnly(['key', 'at', 'by', 'byName'])
+          && isLinkKey(request.resource.data.key)
+          && (resource == null || request.resource.data.key != resource.data.key)
+          && request.resource.data.at is number
+          && request.resource.data.by == request.auth.uid;
+      allow delete: if isAdmin();
+    }
+    // Público solo que la ficha se reseteó (para el aviso del link viejo).
+    // En /k/{clave}: lo que la página del jugador necesita de su ficha.
+    match /rosterLinks/{rosterId} {
+      allow get: if isActiveStaff() || guestRosterBase(rosterId);
+      allow create, update: if linkResetter(rosterId)
+          && request.resource.data.keys().hasOnly(['locked', 'at'])
+          && request.resource.data.locked == true
+          && request.resource.data.at is number;
+      allow delete: if isAdmin();
+      match /k/{key} {
+        allow get: if guestRosterBase(rosterId) && linkLocked(rosterId) && key == linkKeyOf(rosterId);
+        allow create, update: if isActiveStaff()
+            && exists(/databases/$(database)/documents/roster/$(rosterId))
+            && key == getAfter(lockPath(rosterId)).data.key
+            && request.resource.data.keys().hasOnly(['name', 'shortName', 'holders', 'createdByUid', 'phoneKey', 'hasPhone'])
+            && request.resource.data.name is string && request.resource.data.name.size() <= 60;
+        allow delete: if isActiveStaff();
+      }
+    }
+    match /linkProofs/{rosterId}/k/{key} {
+      allow create, update: if key == linkKeyOf(rosterId)
+          && request.resource.data.keys().hasOnly(['at'])
+          && request.resource.data.at == request.time;
+      allow read, delete: if false;
+    }
+
     match /shareTokens/{token} {
       allow get: if token.size() >= 20 && token.size() <= 80 && token.matches('^[A-Za-z0-9_-]+$');
       allow list: if isActiveStaff() && resource.data.uid == request.auth.uid;
@@ -1157,7 +1243,8 @@ service cloud.firestore {
     }
 
     match /signupRates/{rosterId} {
-      allow get: if (signedIn() && (holdsRoster(rosterId) || isActiveStaff())) || guestRoster(rosterId);
+      // v237: la lectura (dentro de la transacción) no puede traer la prueba; la escritura sí.
+      allow get: if (signedIn() && (holdsRoster(rosterId) || isActiveStaff())) || guestRosterBase(rosterId);
       allow create, update: if ((signedIn() && holdsRoster(rosterId)) || guestRoster(rosterId)) && signupRateOk();
       allow delete: if isAdmin();
     }

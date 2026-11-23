@@ -17,6 +17,7 @@ import {
 } from './reminders.js';
 import { PRIVATE_WA_TEXT } from './privacy.js';
 import { playerMoreItems, playerShareTarget } from './player-more.js';
+import { LINK_INVALID_TEXT, canResetLink, linkResetQuestion } from './link-reset.js';
 import { activityNoticeText, activityNotices } from './notify.js';
 import { ROSTER_DENIED_WRITE, SUSPENDED_TEXT, activeSuspensions, blockingSuspensions, canonicalPhone, capitalizeWords, cleanShortName, displayName, foldText, fullNameBehind, givenName, nickOf, isRosterDenied, personKey, phoneIdentity, playerMatchesPerson, rosterByIdentity, rosterByPhone, rosterForOrganizer, rosterHeldBy, rosterIdForSuspension, searchRoster, suspensionHistoryOf, visibleRosterHits, visibleRosterPhone, withPendingRoster } from './roster.js';
 import { ALREADY_IN_MATCH, alreadyInMatch, attachRosterGuest, duplicateText, isDuplicateText, firstDuplicate, groupByInviter, inviteBlock, isAutoGuestName, isGuest, normName, placeGroup, resolveFriendNames, rootInviterId, sameDayPromoGuestRenames, waitWarning } from './guests.js';
@@ -48,7 +49,7 @@ import {
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v236';
+const APP_VERSION = 'f7c-v237';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -988,10 +989,12 @@ function route() {
   if (name === 'usuarios') return { name: 'users' };
   if (name === 'jugador' && id) {
     let rosterId = id;
-    let share = extra || '';
+    let share = extra && extra !== '-' ? extra : '';
+    let key = h.split('/')[3] || '';
     try { rosterId = decodeURIComponent(id); } catch { /* el id queda como vino */ }
     try { share = share ? decodeURIComponent(share) : ''; } catch { /* el token queda como vino */ }
-    return { name: 'profile', id: rosterId, share };
+    try { key = key ? decodeURIComponent(key) : ''; } catch { /* la clave queda como vino */ }
+    return { name: 'profile', id: rosterId, share, key };
   }
   return { name: 'home' };
 }
@@ -1005,20 +1008,21 @@ async function bootGuestPlayer() {
   app.guestPlayer = true;
   const id = route().id;
   const share = route().share || '';
+  const linkKey = route().key || '';
   if (!app.session) {
     app.session = openSession();
     await app.session.init();
   }
   if (app.session.user) return;
   if (!app.store) {
-    app.store = await createStore(() => {}, { guestRosterId: id, shareToken: share });
+    app.store = await createStore(() => {}, { guestRosterId: id, shareToken: share, linkKey });
     const demo = document.getElementById('demo-banner');
     if (demo) demo.hidden = app.store.mode === 'firebase';
     app.store.setActor(null);
     app.store.subscribe(onStoreView);
     return;
   }
-  if (typeof app.store.listenAsGuest === 'function') app.store.listenAsGuest(id, share);
+  if (typeof app.store.listenAsGuest === 'function') app.store.listenAsGuest(id, share, linkKey);
   else render();
 }
 function lockShell() {
@@ -1191,7 +1195,8 @@ function render() {
       if (!app.loaded) return;
       const id = route().id;
       const person = (app.roster || []).find((row) => row.id === id);
-      if (person) renderPlayerSignup(person);
+      if (app.store?.linkInvalid === true) showLinkInvalid();
+      else if (person) renderPlayerSignup(person);
       else showAnonymousDenial();
     }
     return;
@@ -2752,8 +2757,10 @@ function playerShareButton(id) {
   return `<button type="button" class="icon-btn player-share" id="${id}" aria-label="Copiar enlace">${ICON.shareNodes}</button>`;
 }
 /** v236: los tres puntos a la derecha del ícono de compartir. */
-function playerMoreControl(id, panel) {
-  const items = playerMoreItems({ canCredit: canOfferCredit(staffActor()), creditAmount: panel?.shownAmount || 0 });
+function playerMoreControl(id, panel, rosterId = '') {
+  const person = rosterId ? (app.roster || []).find((row) => row.id === rosterId) : null;
+  const canReset = !!person && canResetLink(person, staffActor()) && typeof app.store?.resetPlayerLink === 'function';
+  const items = playerMoreItems({ canCredit: canOfferCredit(staffActor()), creditAmount: panel?.shownAmount || 0, canReset });
   const buttons = items.map((item) => `<button type="button" class="more-item" role="menuitem" data-more="${esc(item.key)}"${item.disabled ? ' disabled' : ''}>${esc(item.label)}</button>`).join('');
   return `<div class="more-wrap"><button type="button" class="icon-btn player-more" id="${id}" aria-label="Más opciones" aria-haspopup="menu" aria-expanded="false">${ICON.more}</button><div class="more-pop" id="${id}-menu" role="menu" hidden>${buttons}</div></div>`;
 }
@@ -2784,7 +2791,8 @@ function bindPlayerMore(id, { rosterId, phone, player = null, person = null, pan
     if (!item || item.disabled) return;
     close();
     const kind = item.dataset.more;
-    if (kind === 'share') sharePlayerLink(rosterId, phone);
+    if (kind === 'reset') resetPlayerLinkFlow(rosterId, phone);
+    else if (kind === 'share') sharePlayerLink(rosterId, phone);
     else if (kind === 'credit') openCreditForm({ player, person, panel });
     else if (kind === 'refund' && Number(panel?.shownAmount) > 0) openCreditReturnForm({ player, person, panel });
   };
@@ -2809,7 +2817,41 @@ async function sharePlayerLink(rosterId, phone) {
 async function playerShareUrl(rosterId) {
   let token = '';
   try { token = await app.store?.ensureShareToken?.(actor().uid, actor().name) || ''; } catch { token = ''; }
-  return playerLink(rosterId, token);
+  // v237: con el link reseteado, la clave vigente va en el link.
+  let key = '';
+  try { key = await app.store?.rosterLinkKey?.(rosterId) || ''; } catch { key = ''; }
+  return playerLink(rosterId, token, key);
+}
+/** v237: «Resetear link». Confirma, rota la clave y ofrece compartir el link nuevo. */
+async function resetPlayerLinkFlow(rosterId, phone) {
+  const person = (app.roster || []).find((row) => row.id === rosterId);
+  if (!person) { playerNotListed(); return; }
+  if (!await askConfirm(linkResetQuestion(person.name), { danger: true, okText: 'Resetear' })) return;
+  let done = null;
+  try {
+    done = await app.store.resetPlayerLink(rosterId);
+  } catch (error) {
+    console.error(error);
+    toast('No se pudo resetear el link. Probá de nuevo.');
+    return;
+  }
+  const missed = Number(done?.missed) || 0;
+  const note = missed ? `<p class="hint">${missed === 1 ? 'Una anotación' : `${missed} anotaciones`} de otro organizador no se pudo pasar al link nuevo: no va a aparecer en el link hasta que ese organizador la vuelva a cargar.</p>` : '';
+  openSheet(`<h3>Link reseteado</h3><p>Los links anteriores de ${esc(person.name || 'este jugador')} ya no funcionan.</p>${note}<div class="sheet-actions"><button type="button" class="btn" data-close>Cerrar</button><button type="button" class="btn primary" id="reset-share">Compartir link</button></div>`);
+  const share = $('#reset-share');
+  if (share) {
+    share.onclick = () => {
+      closeSheet();
+      sharePlayerLink(rosterId, phone);
+    };
+    share.focus();
+  }
+}
+/** v237: el link viejo de una ficha reseteada. */
+function showLinkInvalid() {
+  document.documentElement.classList.add('anon-lock');
+  try { if (sheet?.open) sheet.close(); } catch { /* sigue cerrado */ }
+  replaceView(`<div class="anon-lock" id="player-link-invalid"><p class="anon-warn" aria-hidden="true">⚠️</p><p><b>${esc(LINK_INVALID_TEXT)}</b></p></div>`);
 }
 function playerNotListed() {
   openSheet(`<h3>Enlace</h3><p>Este jugador todavía no está en Jugadores.</p><div class="sheet-actions"><button type="button" class="btn" data-close>Cerrar</button></div>`);
@@ -4764,7 +4806,7 @@ function renderProfile(id) {
       <div class="name-share">
         <h2 class="section${fichaSuspended(person)}">${fichaName(person, person.name)}</h2>
         ${playerShareButton('profile-share')}
-        ${playerMoreControl('profile-more', money.panel)}
+        ${playerMoreControl('profile-more', money.panel, person.id)}
       </div>
       ${money.panel.nickHtml}
       ${own ? `<label class="field profile-name"><span>Nombre</span><input id="profile-name" maxlength="60" autocomplete="name" autocapitalize="words" data-cap-words="1" value="${esc(person.name)}"></label>` : ''}
@@ -7952,7 +7994,7 @@ function openPlayerMenu(m, p) {
     <div class="name-share">
       <h3 class="${suspendedClass(p).trim()}">${suspendedName(p, shownName(p))}</h3>
       ${playerShareButton('pm-share')}
-      ${playerMoreControl('pm-more', panel)}
+      ${playerMoreControl('pm-more', panel, shareRosterId(p))}
     </div>
     <div class="player-panel" id="menu-panel">${panel.nickHtml}${panel.balance}${panel.err}${panel.notesHtml}${panel.statsButton}</div>
     <p class="hint">${fullNameBehind(p, app.roster) ? `<span id="menu-full-name" class="${suspendedClass(p).trim()}">${suspendedName(p, p.name)}</span> · ` : ''}${phoneView.phone ? esc(displayFromWa(phoneView.phone)) + ' · ' : phoneHidden(phoneView) ? esc(PRIVATE_WA_TEXT) + ' · ' : ''}Agregó: ${esc(p.addedBy || '?')}</p>
@@ -8827,7 +8869,7 @@ async function boot() {
     lockShell();
     document.documentElement.classList.add('anon-lock');
     app.guestPlayer = true;
-    app.store = await createStore(() => {}, { guestRosterId: route().id, shareToken: route().share || '' });
+    app.store = await createStore(() => {}, { guestRosterId: route().id, shareToken: route().share || '', linkKey: route().key || '' });
     $('#demo-banner').hidden = app.store.mode === 'firebase';
     app.store.setActor(null);
   }

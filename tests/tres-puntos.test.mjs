@@ -28,8 +28,8 @@ test('tres puntos: Compartir link manda el link completo, al chat del jugador si
 
 test('tres puntos: están en el menú del jugador y en el perfil, al lado de compartir, y reusan las funciones de siempre', () => {
   const app = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
-  assert.match(app, /\$\{playerShareButton\('pm-share'\)\}\s*\$\{playerMoreControl\('pm-more', panel\)\}/);
-  assert.match(app, /\$\{playerShareButton\('profile-share'\)\}\s*\$\{playerMoreControl\('profile-more', money\.panel\)\}/);
+  assert.match(app, /\$\{playerShareButton\('pm-share'\)\}\s*\$\{playerMoreControl\('pm-more', panel, shareRosterId\(p\)\)\}/);
+  assert.match(app, /\$\{playerShareButton\('profile-share'\)\}\s*\$\{playerMoreControl\('profile-more', money\.panel, person\.id\)\}/);
   assert.match(app, /kind === 'credit'\) openCreditForm\(\{ player, person, panel \}\)/);
   assert.match(app, /kind === 'refund' && Number\(panel\?\.shownAmount\) > 0\) openCreditReturnForm\(\{ player, person, panel \}\)/);
   assert.match(app, /kind === 'share'\) sharePlayerLink\(rosterId, phone\)/);
