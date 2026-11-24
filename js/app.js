@@ -52,7 +52,7 @@ import {
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v243';
+const APP_VERSION = 'f7c-v244';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -8945,7 +8945,10 @@ async function boot() {
       app.role = user.role;
       app.uid = user.uid;
     }
-    if (app.store) app.store.setActor(user);
+    if (app.store) {
+      app.store.setActor(user);
+      app.store.setLogStaff(users);
+    }
     if (sheet.open && app.refreshPaySheet) app.refreshPaySheet();
     if (!sameSession && app.loaded && (!sheet.open || !sheet.querySelector('input, textarea')) && location.hash !== '#/usuarios') render();
   });
@@ -8966,6 +8969,7 @@ async function boot() {
     });
     $('#demo-banner').hidden = app.store.mode === 'firebase';
     app.store.setActor(app.session.user);
+    app.store.setLogStaff(app.users);
     if (app.store.mode === 'firebase') {
       const offline = () => { if (app.session?.user) showConnectionNotice({ code: 'offline' }); };
       window.addEventListener('offline', offline);
