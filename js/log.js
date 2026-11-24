@@ -4,6 +4,7 @@
 import { addDays, capitalize, labelDate, toEpoch, todayISO } from './dates.js';
 import { formatARS, hasPaymentDirection, paymentParts } from './payments.js';
 import { venueLabel } from './venues.js';
+import { canView, isRestricted } from './access.js';
 
 export const LOG_LIMIT = 200;
 /** Días hacia atrás, sin contar hoy. El rango es ese día inclusive hasta hoy. */
@@ -28,36 +29,64 @@ function unique(ids) {
   return out;
 }
 
+/** Staff activo (admin u organizador) como uids, para resolver `*` al escribir. */
+export function logStaffIds(staff = []) {
+  const raw = Array.isArray(staff)
+    ? staff
+    : Object.entries(staff || {}).map(([uid, row]) => ({ uid: row?.uid || uid, ...row }));
+  const ids = [];
+  for (const item of raw) {
+    if (typeof item === 'string') {
+      const id = clean(item, 128);
+      if (id && id !== '*') ids.push(id);
+      continue;
+    }
+    if (!item || item.active === false) continue;
+    const role = item.role;
+    if (role && role !== 'admin' && role !== 'organizer') continue;
+    const id = clean(item.uid, 128);
+    if (id && id !== '*') ids.push(id);
+  }
+  return unique(ids);
+}
+
+let defaultLogStaff = [];
+
+/** Lo llama el store cuando carga la lista de organizadores activos. */
+export function setDefaultLogStaff(staff = []) {
+  defaultLogStaff = logStaffIds(staff);
+}
+
 /**
- * Quién puede ver la línea: el creador, quienes están en viewers o adders
- * con su uid (no `*`), y quien anotó el evento. Un partido abierto para
- * todos (viewers o adders `*`) no copia `*` al registro: si no, cualquier
- * organizador ve movimientos de partidos en los que no organiza.
- * Se copia al escribir. Las líneas viejas no se reescriben.
+ * Quién puede ver la línea: el creador, el staff explícito en viewers o
+ * adders, quien anotó el evento, y —si el partido es abierto (`*` o
+ * viewers vacío)— los organizadores activos de ese momento. No se escribe
+ * `*`: cada uid queda copiado. Las líneas viejas no se reescriben solas.
  */
-export function editorsOf(match, actorUid = '') {
+export function editorsOf(match, actorUid = '', staff = defaultLogStaff) {
   const me = clean(actorUid, 128);
+  const team = logStaffIds(staff);
   if (!match) return me ? [me] : [];
   const creator = clean(match.createdByUid, 128);
   const viewers = (Array.isArray(match.viewers) ? match.viewers : []).filter((id) => id && id !== '*');
   const adders = (Array.isArray(match.adders) ? match.adders : []).filter((id) => id && id !== '*');
-  return unique([...viewers, ...adders, creator, me]).slice(0, 31);
+  const ids = [...viewers, ...adders, creator, me];
+  if (!isRestricted(match)) ids.push(...team);
+  return unique(ids).slice(0, 31);
 }
 
-/** Dueño o staff explícito del partido. `*` en viewers/adders no cuenta. */
+/** Puede ver el partido: creador, uid explícito, o partido abierto (`*`). */
 export function isLogStaff(match, uid) {
   const id = clean(uid, 128);
   if (!match || !id) return false;
-  if (clean(match.createdByUid, 128) === id) return true;
-  const viewers = Array.isArray(match.viewers) ? match.viewers : [];
-  const adders = Array.isArray(match.adders) ? match.adders : [];
-  return viewers.includes(id) || adders.includes(id);
+  return canView(match, id);
 }
 
 /**
- * Registro: solo lo que le toca al organizador. `editors: ['*']` (líneas
- * viejas) no abre el registro a todo el mundo. Hace falta el uid en
- * editors, ser quien registró el movimiento, o ser staff del partido.
+ * Registro: los movimientos del partido si el organizador lo tiene a
+ * la vista (lo organiza o es un partido abierto). `editors: ['*']` de
+ * líneas viejas no abre el registro de un partido ajeno. También ve lo
+ * que él mismo registró o si su uid está en editors.
  */
 export function canSeeLog(entry, uid, matches = []) {
   const id = String(uid || '').trim();
@@ -72,7 +101,7 @@ export function canSeeLog(entry, uid, matches = []) {
   return isLogStaff(match, id);
 }
 
-export function matchLogFields(match, venues) {
+export function matchLogFields(match, venues, staff = defaultLogStaff) {
   const date = clean(match?.date, 10);
   const time = clean(match?.time, 5);
   const place = match ? venueLabel(match, venues) : '';
@@ -82,7 +111,7 @@ export function matchLogFields(match, venues) {
     matchDate: date,
     matchTime: time,
     matchLabel: clean(place ? `${when} · ${place}` : when, 160),
-    editors: editorsOf(match),
+    editors: editorsOf(match, '', staff),
   };
 }
 
@@ -95,8 +124,8 @@ export function playerLogFields(player, mates) {
   return { playerName, hostName };
 }
 
-export function blankLog(partial, actor) {
-  const editors = editorsOf(partial?.match, actor?.uid);
+export function blankLog(partial, actor, staff = defaultLogStaff) {
+  const editors = editorsOf(partial?.match, actor?.uid, staff);
   const base = {
     at: Date.now(),
     actorUid: clean(actor?.uid, 128),
@@ -344,15 +373,15 @@ export function selfMoveEntry(match, venues, player, move = {}) {
   );
 }
 
-export function partidoEntry(actor, match, venues, extra = {}) {
-  const fields = matchLogFields(match, venues);
-  fields.editors = editorsOf(match, actor?.uid);
-  return blankLog({ ...fields, section: 'partidos', ...extra }, actor);
+export function partidoEntry(actor, match, venues, extra = {}, staff = defaultLogStaff) {
+  const fields = matchLogFields(match, venues, staff);
+  fields.editors = editorsOf(match, actor?.uid, staff);
+  return blankLog({ ...fields, section: 'partidos', ...extra }, actor, staff);
 }
 
-export function pagoEntry(actor, match, venues, player, mates, line) {
-  const fields = matchLogFields(match || { id: player?.matchId || '' }, venues);
-  fields.editors = editorsOf(match, actor?.uid);
+export function pagoEntry(actor, match, venues, player, mates, line, staff = defaultLogStaff) {
+  const fields = matchLogFields(match || { id: player?.matchId || '' }, venues, staff);
+  fields.editors = editorsOf(match, actor?.uid, staff);
   if (!match) fields.matchLabel = 'Sin partido';
   const entry = blankLog({
     ...fields,
@@ -362,7 +391,7 @@ export function pagoEntry(actor, match, venues, player, mates, line) {
     amount: line?.amount || 0,
     detail: line?.detail || '',
     ...playerLogFields(player, mates),
-  }, actor);
+  }, actor, staff);
   const fromLine = clean(line?.paidTo, 80);
   const fromPlayer = joinCollectors(collectorNames(player, entry.method));
   let paidTo = fromLine || fromPlayer;

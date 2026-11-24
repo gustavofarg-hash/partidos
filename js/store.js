@@ -116,7 +116,7 @@ import {
   DEFAULT_VENUE_ID, DEFAULT_VENUE_NAME, VENUES_DENIED_READ, cleanCourt, cleanVenueName, isVenueDenied, matchSize, sameVenueName, venueSlug,
 } from './venues.js';
 import { BACKUP_COLLECTIONS, BACKUP_WRITE_BATCH, COLLECTION_LABELS, RESET_STALLED, TRIAL_WRITE_PARALLEL, backupReadError, backupWriteError, buildBackup, firestoreRestFields, hostsBeforeGuests, parseBackup, plainValue, remapTrialBackup, requireAdmin, reviveValue, trialLinkStages, trialMockToken, trialOpKey, trialPlayerPlan, trialShouldReplace, withDeadline } from './backup.js';
-import { canSeeLog, inLogRange, matchEditDetail, pagoEntry, partidoEntry, paymentLines, playerLogFields, selfMoveEntry, LOG_LIMIT, weekRange, rangeMillis } from './log.js';
+import { canSeeLog, inLogRange, matchEditDetail, pagoEntry, partidoEntry, paymentLines, playerLogFields, selfMoveEntry, setDefaultLogStaff, LOG_LIMIT, weekRange, rangeMillis } from './log.js';
 import { behaviorDeleteLog, behaviorLog, cleanBehaviorEntry } from './behavior.js';
 import { statsFetchRange } from './stats-range.js';
 
@@ -706,6 +706,14 @@ function localCollections(db) {
 /* ───────────── Modo demo (localStorage) ───────────── */
 class LocalStore {
   constructor() { this.key = DEMO_STORAGE_KEY; this.mode = 'demo'; this.listeners = new Set(); this.actor = null; this._historyFilter = null; this._queryDay = todayISO(); this._logRange = weekRange(); }
+
+  setLogStaff(users) {
+    const list = Array.isArray(users)
+      ? users
+      : Object.entries(users || {}).map(([uid, row]) => ({ uid: row?.uid || uid, ...row }));
+    this._logStaff = list;
+    setDefaultLogStaff(list);
+  }
   setActor(user) {
     const next = actorRecord(user);
     if (this.actor?.uid === next.uid && this.actor?.name === next.name && this.actor?.role === next.role) return;
@@ -2152,6 +2160,14 @@ export class FirebaseStore {
       console.error(e);
       return 'missing';
     }
+  }
+
+  setLogStaff(users) {
+    const list = Array.isArray(users)
+      ? users
+      : Object.entries(users || {}).map(([uid, row]) => ({ uid: row?.uid || uid, ...row }));
+    this._logStaff = list;
+    setDefaultLogStaff(list);
   }
   setActor(user) {
     const next = actorRecord(user);
