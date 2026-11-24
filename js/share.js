@@ -1,6 +1,6 @@
-import { publicAppOrigin } from './trial.js';
+import { PRODUCTION_ORIGIN, publicAppOrigin } from './trial.js';
 
-export const APP_INSTALL_URL = 'https://gustavofarg-hash.github.io/futbol-colegiales/';
+export const APP_INSTALL_URL = `${PRODUCTION_ORIGIN}/`;
 
 export function appInstallUrl() {
   const base = publicAppOrigin();

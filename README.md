@@ -116,7 +116,7 @@ Cada vez que cambies archivos, subilos de nuevo al repositorio. Para que los tel
 
 ### Versión de prueba
 
-Los cambios se pueden mirar antes en https://gustavofarg-hash.github.io/futbol-colegiales/prueba/ , con otra base, sin escribir en producción. Los pasos están en [docs/PRUEBA.md](docs/PRUEBA.md). Mientras **Settings → Pages** siga en «Deploy from a branch», el sitio público no cambia.
+Los cambios se pueden mirar antes en https://gustavofarg-hash.github.io/partidos/prueba/ , con otra base, sin escribir en producción. Los pasos están en [docs/PRUEBA.md](docs/PRUEBA.md). Mientras **Settings → Pages** siga en «Deploy from a branch», el sitio público no cambia.
 
 ---
 
@@ -246,7 +246,7 @@ Si el partido empieza en **2 horas o menos** y a quien está logueado todavía l
 
 ### Armar los links desde afuera (sin abrir la app)
 
-`js/reminders.js` exporta `reminderLinks({ match, players, venue })`. Devuelve `[{ id, name, waUrl, confirmUrl }]` para cada jugador que tenga `phone` y `confirmToken`. El lugar por defecto es `Polideportivo Colegiales`. Si el jugador tiene `shortCode`, `confirmUrl` es `https://gustavofarg-hash.github.io/futbol-colegiales/c/?k={shortCode}`. Si no, sigue siendo `confirmar.html`.
+`js/reminders.js` exporta `reminderLinks({ match, players, venue })`. Devuelve `[{ id, name, waUrl, confirmUrl }]` para cada jugador que tenga `phone` y `confirmToken`. El lugar por defecto es `Polideportivo Colegiales`. Si el jugador tiene `shortCode`, `confirmUrl` es `https://gustavofarg-hash.github.io/partidos/c/?k={shortCode}`. Si no, sigue siendo `confirmar.html`.
 
 Con las reglas de este repo, `players` y `matches` **no** se leen sin una cuenta de organizador. Un script anónimo ya no puede armar los links por REST: el teléfono vive solo en `players`. La ficha pública es `confirmations/{token}` y no trae teléfonos. La app, con la sesión iniciada, crea esa ficha al anotar y también la primera vez que ve un jugador viejo.
 
