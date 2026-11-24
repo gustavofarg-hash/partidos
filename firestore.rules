@@ -419,7 +419,23 @@ service cloud.firestore {
           && request.resource.data.get('level', null) == resource.data.get('level', null)
           && request.resource.data.get('positions', null) == resource.data.get('positions', null)
           && request.resource.data.get('notes', null) == resource.data.get('notes', null)
-          && request.resource.data.get('shortName', null) == resource.data.get('shortName', null);
+          && request.resource.data.get('shortName', null) == resource.data.get('shortName', null)
+          && request.resource.data.get('names', null) == resource.data.get('names', null);
+    }
+    // v249: nombre y apodo propios de cada organizador en la ficha compartida.
+    // names.{uid} = { name, shortName }. Cada uno toca solo su entrada.
+    function rosterNameEntryOk(e) {
+      return e is map && e.keys().hasOnly(['name', 'shortName'])
+          && e.name is string && e.name.size() > 0 && e.name.size() <= 60
+          && (!('shortName' in e) || (e.shortName is string && e.shortName.size() <= 40));
+    }
+    function rosterNamesOwn() {
+      let after = request.resource.data.get('names', {});
+      let before = resource.data.get('names', {});
+      return after == before
+          || (after is map
+              && after.diff(before is map ? before : {}).affectedKeys().hasOnly([request.auth.uid])
+              && (!(request.auth.uid in after) || rosterNameEntryOk(after[request.auth.uid])));
     }
 
     // Un organizador puede actualizar al jugador. El nombre y el teléfono
@@ -549,7 +565,8 @@ service cloud.firestore {
           && (!('positions' in d) || positionsOk(d.positions))
           && (!('notes' in d) || notesOk(d.notes))
           && (!('shortName' in d) || (d.shortName is string && d.shortName.size() <= 40))
-          && (!('holders' in d) || holdersOk(d.holders));
+          && (!('holders' in d) || holdersOk(d.holders))
+          && (!('names' in d) || d.names is map);
     }
     function validOrganizer(d) {
       return d.name is string && d.name.size() > 0 && d.name.size() <= 40
@@ -1213,7 +1230,7 @@ service cloud.firestore {
         allow create, update: if isActiveStaff()
             && exists(/databases/$(database)/documents/roster/$(rosterId))
             && key == getAfter(lockPath(rosterId)).data.key
-            && request.resource.data.keys().hasOnly(['name', 'shortName', 'holders', 'createdByUid', 'phoneKey', 'hasPhone'])
+            && request.resource.data.keys().hasOnly(['name', 'shortName', 'holders', 'createdByUid', 'phoneKey', 'hasPhone', 'names'])
             && request.resource.data.name is string && request.resource.data.name.size() <= 60;
         allow delete: if isActiveStaff();
       }
@@ -1263,7 +1280,8 @@ service cloud.firestore {
       allow update: if isActiveStaff()
           && exists(claimPath(rosterId))
           && get(claimPath(rosterId)).data.phone == get(/databases/$(database)/documents/rosterContacts/$(rosterId)).data.phone
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['holders', 'name', 'shortName', 'updatedAt'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['holders', 'name', 'shortName', 'names', 'updatedAt'])
+          && rosterNamesOwn()
           && rosterStampSame()
           && request.resource.data.phoneKey == resource.data.phoneKey
           && request.resource.data.get('hasPhone', null) == resource.data.get('hasPhone', null)
@@ -1285,6 +1303,7 @@ service cloud.firestore {
       allow update: if isActiveStaff() && validRoster(request.resource.data)
           && rosterStampSame()
           && rosterNotesSame()
+          && rosterNamesOwn()
           && (rosterIdentitySame() || isRosterCreator() || isRosterHolder());
       // El creador saca las notas viejas del documento compartido. Quedan en rosterNotes.
       allow update: if isActiveStaff() && validRoster(request.resource.data)
@@ -1498,7 +1517,9 @@ service cloud.firestore {
       // Sale de la ficha compartida sin borrarla para el resto.
       allow update: if isActiveStaff() && validRoster(request.resource.data)
           && rosterStampSame()
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['holders', 'updatedAt'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['holders', 'names', 'updatedAt'])
+          && rosterNamesOwn()
+          && !(request.auth.uid in request.resource.data.get('names', {}))
           && resource.data.holders.hasAny([request.auth.uid])
           && !request.resource.data.holders.hasAny([request.auth.uid])
           && request.resource.data.holders.size() == resource.data.holders.size() - 1
