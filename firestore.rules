@@ -935,7 +935,7 @@ service cloud.firestore {
 
     function organizerSlotShape(d) {
       return d.keys().hasAll(['matchId', 'matchDate', 'name', 'addedBy', 'addedByUid', 'createdAt', 'updatedAt', 'viewers', 'adders'])
-          && d.keys().hasOnly(['matchId', 'matchDate', 'name', 'phone', 'addedBy', 'addedByUid', 'createdAt', 'updatedAt', 'waiting', 'waitOrder', 'rosterAt', 'confirmToken', 'hasPhone', 'phoneKey', 'phoneOwnerUid', 'phoneShared', 'viewers', 'adders', 'rosterId', 'signedUpWith', 'signedUpWithName', 'shortName', 'tentative', 'tentativeAt', 'selfSignup', 'invitedBy', 'invitedByName', 'guestAuto', 'shortCode', 'shareToken', 'linkKey'])
+          && d.keys().hasOnly(['matchId', 'matchDate', 'name', 'phone', 'addedBy', 'addedByUid', 'createdAt', 'updatedAt', 'waiting', 'waitOrder', 'rosterAt', 'confirmToken', 'hasPhone', 'phoneKey', 'phoneOwnerUid', 'phoneShared', 'viewers', 'adders', 'rosterId', 'signedUpWith', 'signedUpWithName', 'shortName', 'tentative', 'tentativeAt', 'selfSignup', 'invitedBy', 'invitedByName', 'guestAuto', 'shortCode', 'shareToken', 'linkKey', 'noPlay'])
           && d.matchId is string && d.matchId.size() > 0 && d.matchId.size() <= 80
           && d.matchDate is string && d.matchDate.size() == 10
           && d.name is string && d.name.size() > 0 && d.name.size() <= 60
@@ -947,6 +947,8 @@ service cloud.firestore {
           && d.adders is list && d.adders.size() > 0 && d.adders.size() <= 30
           && d.get('paid', false) != true
           && d.get('selfSignup', false) != true
+          // v245: alta directa en «No jugó pero pagó» (no ocupa lugar ni va a la espera).
+          && (!('noPlay' in d) || d.noPlay == false || (d.noPlay == true && d.get('waiting', false) != true && d.get('tentative', false) != true))
           && (!('waiting' in d) || d.waiting is bool)
           && (!('waitOrder' in d) || d.waitOrder == null || (d.waitOrder is int && d.waitOrder >= 0 && d.waitOrder <= 1000000))
           && (!('rosterAt' in d) || d.rosterAt == null || d.rosterAt is number)
@@ -1556,6 +1558,22 @@ service cloud.firestore {
       allow create, update: if isActiveStaff() && validSuspension(request.resource.data)
           && suspensionId == request.resource.data.rosterId + '_' + request.auth.uid;
       allow delete: if isActiveStaff() && resource.data.ownerUid == request.auth.uid;
+    }
+
+    // v245: marca de suspensión para la página del jugador (Autoservicio, sin sesión).
+    // Solo dice que el organizador {uid} suspendió a la ficha {rosterId}: sin motivo ni fecha.
+    // Se lee de a un documento (get), nunca en lista.
+    match /suspendFlags/{flagId} {
+      allow get: if true;
+      allow read, write: if isAdmin();
+      allow create, update: if isActiveStaff()
+          && request.resource.data.keys().hasOnly(['ownerUid', 'rosterId', 'at'])
+          && request.resource.data.ownerUid == request.auth.uid
+          && request.resource.data.rosterId is string
+          && request.resource.data.rosterId.size() > 0 && request.resource.data.rosterId.size() <= 200
+          && request.resource.data.at is int && request.resource.data.at > 0
+          && flagId == request.resource.data.rosterId + '_' + request.auth.uid;
+      allow delete: if isActiveStaff() && (resource == null || resource.data.ownerUid == request.auth.uid);
     }
 
     function validSuspensionHistory(d) {

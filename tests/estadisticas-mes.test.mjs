@@ -19,8 +19,10 @@ test('rangos: el mes en curso siempre; otro mes o el año solo si se eligen', ()
     { from: '2026-11-01', to: '2026-11-22' }, { from: '2026-10-01', to: '2026-10-31' },
   ]);
   assert.deepEqual(statsRangesFor({ mode: 'mes', today, monthsBack: 2 }).map((r) => r.from), ['2026-11-01', '2026-10-01', '2026-09-01']);
-  assert.deepEqual(statsRangesFor({ mode: 'anio', today }).at(-1), { from: '2026-01-01', to: '2026-11-22' });
-  assert.deepEqual(statsRangesFor({ mode: 'anio', id: '2025', today }).at(-1), { from: '2025-01-01', to: '2025-12-31' });
+  // v245: el año va de a un mes, del más nuevo al más viejo.
+  assert.deepEqual(statsRangesFor({ mode: 'anio', today }).at(-1), { from: '2026-01-01', to: '2026-01-31' });
+  assert.equal(statsRangesFor({ mode: 'anio', today }).length, 11);
+  assert.deepEqual(statsRangesFor({ mode: 'anio', id: '2025', today }).at(-1), { from: '2025-01-01', to: '2025-01-31' });
   // El 1 del mes no hay días pasados del mes.
   assert.deepEqual(statsRangesFor({ mode: 'mes', today: '2026-12-01' }), []);
   assert.equal(monthRange('2026-02', '2026-03-10').to, '2026-02-28');
@@ -176,7 +178,7 @@ test('la app usa lo pedido en Día, Mes, Año y Jugador', () => {
     /const buckets = periodBuckets\(\{\n    matches: statsMatchList\(\),\n    players: statsPlayerList\(\),/,
     /players: statsPlayerList\(\),\n      matches: statsMatchList\(\),/,
   ]) assert.match(app, re);
-  assert.match(app, /app\.statsMatches, app\.statsPlayers, app\.statsLoading, app\.statsError\]\);/);
+  assert.match(app, /app\.statsMatches, app\.statsPlayers, app\.statsLoading, app\.statsError, app\.guestBlocked, app\.guestReady, app\.guestAccessError, app\.guestHiddenError\]\);/);
   assert.match(app, /id="stats-older"/);
   assert.ok(sw.includes("'js/stats-range.js'"));
 });
