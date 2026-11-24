@@ -1,6 +1,8 @@
 import { PRODUCTION_ORIGIN, publicAppOrigin } from './trial.js';
 
 export const APP_INSTALL_URL = `${PRODUCTION_ORIGIN}/`;
+/** v248: página del link de Autoservicio (vista previa propia y salto a la app). */
+export const AUTOSERVICIO_PATH = 'autoservicio/';
 
 export function appInstallUrl() {
   const base = publicAppOrigin();
@@ -22,13 +24,15 @@ export function newShareToken() {
  * Sin token, el enlace viejo: #/jugador/{id}.
  * v237: con el link reseteado va la clave al final: #/jugador/{id}/{token}/{clave}
  * (sin token, «-» en su lugar).
+ * v248: va por autoservicio/ (la vista previa de WhatsApp dice «Autoservicio»), que
+ * salta a la app con el mismo #. Los links viejos sin autoservicio/ siguen andando.
  */
 export function playerLink(rosterId, organizerToken = '', linkKey = '') {
   const id = String(rosterId || '').trim();
   if (!id) return '';
   const token = String(organizerToken || '').trim();
   const key = String(linkKey || '').trim();
-  const base = `${appInstallUrl()}#/jugador/${encodeURIComponent(id)}`;
+  const base = `${appInstallUrl()}${AUTOSERVICIO_PATH}#/jugador/${encodeURIComponent(id)}`;
   if (key) return `${base}/${token ? encodeURIComponent(token) : '-'}/${encodeURIComponent(key)}`;
   return token ? `${base}/${encodeURIComponent(token)}` : base;
 }
