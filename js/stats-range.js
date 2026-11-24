@@ -53,13 +53,30 @@ export function statsRangesFor({ mode, id = '', today, monthsBack = 0 } = {}) {
   if (mode === 'mes' && MONTH.test(key)) push(monthRange(key, today));
   if (mode === 'dia' && DAY.test(key)) push(monthRange(key.slice(0, 7), today));
   if (mode === 'anio') {
-    const year = YEAR.test(key) ? key : today.slice(0, 4);
-    const yesterday = addDays(today, -1);
-    const to = `${year}-12-31` < yesterday ? `${year}-12-31` : yesterday;
-    const from = `${year}-01-01`;
-    if (from <= to) push({ from, to });
+    // v245 (pedido 19): el año se pide de a un mes, del más nuevo al más viejo,
+    // en vez de todo junto. El total se muestra como parcial hasta tener los 12.
+    for (const ym of yearMonths(YEAR.test(key) ? key : today.slice(0, 4), today)) push(monthRange(ym, today));
   }
   return out;
+}
+
+/** Meses de un año que ya empezaron, del más nuevo al más viejo. */
+export function yearMonths(year, today) {
+  if (!YEAR.test(String(year || '')) || !DAY.test(today || '')) return [];
+  const last = String(year) < today.slice(0, 4) ? 12 : (String(year) === today.slice(0, 4) ? Number(today.slice(5, 7)) : 0);
+  const out = [];
+  for (let m = last; m >= 1; m -= 1) out.push(`${year}-${String(m).padStart(2, '0')}`);
+  return out;
+}
+
+/**
+ * v245 (pedido 19): un mes está completo si no le falta nada por pedir.
+ * `ready(from, to)` lo contesta el store; sin esa función (demo) todo está.
+ */
+export function monthIsReady(ym, today, ready) {
+  const range = monthRange(ym, today);
+  if (!range) return true;
+  return typeof ready === 'function' ? ready(range.from, range.to) === true : true;
 }
 
 /**

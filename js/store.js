@@ -119,6 +119,7 @@ import { BACKUP_COLLECTIONS, BACKUP_WRITE_BATCH, COLLECTION_LABELS, RESET_STALLE
 import { canSeeLog, inLogRange, matchEditDetail, pagoEntry, partidoEntry, paymentLines, playerLogFields, selfMoveEntry, setDefaultLogStaff, LOG_LIMIT, weekRange, rangeMillis } from './log.js';
 import { behaviorDeleteLog, behaviorLog, cleanBehaviorEntry } from './behavior.js';
 import { statsFetchRange } from './stats-range.js';
+import { activeSuspenderUids, matchOrganizerUids, suspendFlagId } from './guest-block.js';
 
 function reportBackupProgress(onProgress, done, total) {
   if (typeof onProgress !== 'function') return;
@@ -964,7 +965,8 @@ class LocalStore {
       .map(([pid, row]) => ({ id: pid, ...row }));
     refuseDuplicate(mates, data);
     refuseGuestHost(mates, data);
-    refuseSuspended(
+    // v245: «No jugó pero pagó» no ocupa lugar ni juega: un suspendido que paga igual se puede cargar.
+    if (opts.noPlay !== true) refuseSuspended(
       Object.values(db.rosterSuspensions || {}),
       Object.entries(db.roster || {}).map(([rid, row]) => ({ id: rid, ...row })),
       { id: match.id, ...(db.matches[match.id] || {}), ...match },
@@ -974,9 +976,9 @@ class LocalStore {
     const mainCount = mates.filter((p) => occupiesSpot(p)).length;
     const selfHold = opts.selfPending === true;
     if (selfHold && mainCount >= cap) throw Object.assign(new Error('El partido se completó.'), { code: 'match-full' });
-    const waiting = selfHold || opts.forceMain === true ? false : (opts.waiting === true || mainCount >= cap);
+    const waiting = selfHold || opts.forceMain === true || opts.noPlay === true ? false : (opts.waiting === true || mainCount >= cap);
     const rosterId = String(data.rosterId || '').trim();
-    const hold = (opts.tentative === true || selfHold) && !waiting;
+    const hold = (opts.tentative === true || selfHold) && !waiting && opts.noPlay !== true;
     const player = {
       matchId: match.id, matchDate: match.date, name: cleanPersonName(data.name),
       addedBy: opts.addedBy || who, addedByUid: opts.addedByUid !== undefined ? opts.addedByUid : (this.actor?.uid || ''), createdAt: now, updatedAt: now,
@@ -991,6 +993,7 @@ class LocalStore {
       ...signupWith(data, this.actor),
       ...(cleanShortName(data.shortName) ? { shortName: cleanShortName(data.shortName) } : {}),
       ...(selfHold || opts.selfSignup === true ? { selfSignup: true } : {}),
+      ...(opts.noPlay === true ? { noPlay: true } : {}),
       ...(rosterId && db.rosterLocks?.[rosterId]?.key ? { linkKey: db.rosterLocks[rosterId].key } : {}),
     };
     db.players[id] = player;
@@ -999,7 +1002,7 @@ class LocalStore {
     if (!(selfHold || opts.selfSignup === true)) this._pushLogs(db, [partidoEntry(this._actor(), { id: match.id, ...savedMatch }, this._venuesOf(db), {
       type: 'alta',
       ...person,
-      detail: selfSignupDetail(player, waiting),
+      detail: opts.noPlay === true ? 'No jugó pero pagó' : selfSignupDetail(player, waiting),
     })]);
     if (data.phone) writeContact(db, 'players', id, data.phone, player, this.actor?.uid || '', data.phoneShared === true);
     else if (data.hasPhone && /^[0-9a-f]{64}$/.test(String(data.phoneKey || ''))) {
@@ -1135,6 +1138,12 @@ class LocalStore {
   listenAsGuest(rosterId, shareToken = '', linkKey = '') {
     this.setGuestLink(rosterId, linkKey);
     this._emit();
+  }
+  /** v245: organizadores que suspendieron a la ficha del link (demo: se leen directo). */
+  guestBlockedUids() {
+    const id = this._guestLink?.id || '';
+    if (!id || this.actor?.uid) return [];
+    return activeSuspenderUids(Object.values(this._load().rosterSuspensions || {}), id);
   }
   /** Sin sesión: el link de una ficha reseteada sin la clave vigente. */
   get linkInvalid() {
@@ -2074,17 +2083,27 @@ export class FirebaseStore {
    * escucha), con sus jugadores, y quedan en memoria en la sesión. Si el
    * historial ya trajo todo lo pasado, no lee nada. Devuelve true si leyó.
    */
-  async loadStatsRange(from, to) {
-    if (!this.fs?.getDocs || this._guest || !this.actor?.uid || !this.db) return false;
-    if (this._statsBusy || Date.now() < (this._statsRetryAt || 0)) return false;
+  _statsLoaded() {
     const bounds = this._historyBounds || historyBounds(this._historyFilter);
-    const loaded = bounds.mode === 'recent'
+    return bounds.mode === 'recent'
       ? {
         ready: this._historySeen === true && this.state.historyLoading !== true && !this._historyBusy,
         hasMore: this.state.historyHasMore === true,
         oldest: this._historyCursor || '',
       }
       : null;
+  }
+  /** v245 (pedido 19): ya está todo lo de ese rango (lo trajo el historial o Estadísticas). */
+  statsRangeReady(from, to) {
+    if (!this.fs?.getDocs || this._guest || !this.actor?.uid || !this.db) return true;
+    const loaded = this._statsLoaded();
+    if (loaded && !loaded.ready) return false;
+    return statsFetchRange({ from, to, loaded, covered: this._statsCovered || [] }) === null;
+  }
+  async loadStatsRange(from, to) {
+    if (!this.fs?.getDocs || this._guest || !this.actor?.uid || !this.db) return false;
+    if (this._statsBusy || Date.now() < (this._statsRetryAt || 0)) return false;
+    const loaded = this._statsLoaded();
     this._statsCovered ||= [];
     const want = statsFetchRange({ from, to, loaded, covered: this._statsCovered });
     if (!want) return false;
@@ -2776,6 +2795,7 @@ export class FirebaseStore {
     const today = this._queryDay;
     const { doc, onSnapshot } = this.fs;
     const seen = { roster: false, matches: false, players: false, share: !this._shareToken };
+    if (this._guestBlocksFor !== id) { this._guestBlocks = new Map(); this._guestBlocksFor = id; }
     const rows = (snap) => snap.docs.map((item) => ({ id: item.id, ...item.data() }));
     const publish = () => {
       if (!seen.roster || !seen.matches || !seen.players || !seen.share) return;
@@ -2795,6 +2815,9 @@ export class FirebaseStore {
       for (const row of this._guestBuckets.open) byId.set(row.id, row);
       for (const row of this._guestBuckets.link) byId.set(row.id, row);
       this.state.matches = [...byId.values()].filter((match) => match.playerVisible !== false && match.cancelled !== true);
+      // v245: ¿alguno de estos organizadores lo suspendió? Un get por organizador, una vez.
+      const uids = this.state.matches.flatMap((match) => matchOrganizerUids(match));
+      void this._checkGuestBlocks(uids).then((changed) => { if (changed) this._emit(); });
     };
     const showPlayers = () => {
       const byId = new Map();
@@ -2868,8 +2891,11 @@ export class FirebaseStore {
         const data = snap.exists() ? snap.data() : null;
         this.state.shareOrganizer = data?.uid ? { uid: String(data.uid), name: String(data.name || ''), token: this._shareToken } : null;
         armMatches(this.state.shareOrganizer?.uid || '');
-        seen.share = true;
-        publish();
+        // v245: antes de mostrar la lista, saber si el dueño del link lo suspendió.
+        const owner = this.state.shareOrganizer?.uid || '';
+        const done = () => { seen.share = true; publish(); };
+        if (owner) void this._checkGuestBlocks([owner]).then(done, done);
+        else done();
       }, (error) => {
         console.error(error?.code || 'sin-codigo', error);
         this.state.shareOrganizer = null;
@@ -3585,6 +3611,7 @@ export class FirebaseStore {
     watch('suspensions', collection(this.db, 'rosterSuspensions'), null, (snap) => {
       this.state.suspensions = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       this._emit();
+      void this.syncSuspendFlags();
     }, () => {
       this.state.suspensions = [];
       this._emit();
@@ -4067,7 +4094,8 @@ export class FirebaseStore {
     const mates = this.state.players.filter((p) => p.matchId === match.id);
     refuseDuplicate(mates, data);
     refuseGuestHost(mates, data);
-    refuseSuspended(
+    // v245: «No jugó pero pagó» no ocupa lugar ni juega: un suspendido que paga igual se puede cargar.
+    if (opts.noPlay !== true) refuseSuspended(
       this.state.suspensions || [],
       this.state.roster || [],
       this.state.matches.find((item) => item.id === match.id) || match,
@@ -4077,10 +4105,10 @@ export class FirebaseStore {
     const mainCount = mates.filter((p) => occupiesSpot(p)).length;
     const selfHold = opts.selfPending === true;
     if (selfHold && mainCount >= cap) throw Object.assign(new Error('El partido se completó.'), { code: 'match-full' });
-    const waiting = selfHold || opts.forceMain === true ? false : (opts.waiting === true || mainCount >= cap);
+    const waiting = selfHold || opts.forceMain === true || opts.noPlay === true ? false : (opts.waiting === true || mainCount >= cap);
     const token = newConfirmToken();
     const rosterId = String(data.rosterId || '').trim();
-    const hold = (opts.tentative === true || selfHold) && !waiting;
+    const hold = (opts.tentative === true || selfHold) && !waiting && opts.noPlay !== true;
     const canon = canonicalWa(data.phone || '');
     const uid = this.actor?.uid || '';
     const selfRow = selfHold || opts.selfSignup === true;
@@ -4101,6 +4129,7 @@ export class FirebaseStore {
       ...signupWith(data, this.actor),
       ...(cleanShortName(data.shortName) ? { shortName: cleanShortName(data.shortName) } : {}),
       ...(selfHold || opts.selfSignup === true ? { selfSignup: true } : {}),
+      ...(opts.noPlay === true ? { noPlay: true } : {}),
       ...(linkToken ? { shareToken: linkToken } : {}),
       ...(rosterId && this.rosterLinkKey(rosterId) ? { linkKey: this.rosterLinkKey(rosterId) } : {}),
     };
@@ -4134,7 +4163,7 @@ export class FirebaseStore {
     if (!(selfHold || opts.selfSignup === true)) await this._appendLogs([partidoEntry(this._actor(), stored, this.state.venues, {
       type: 'alta',
       ...playerLogFields({ id: ref.id, ...player }, [...mates, { id: ref.id, ...player }]),
-      detail: selfSignupDetail(player, waiting),
+      detail: opts.noPlay === true ? 'No jugó pero pagó' : selfSignupDetail(player, waiting),
     })]);
     return ref.id;
   }
@@ -5331,6 +5360,9 @@ export class FirebaseStore {
       ownerUid: uid, rosterId: id, date: event.date, note: event.note, lifted: event.lifted, liftNote: event.liftNote, at,
     });
     await batch.commit();
+    // v245: sin la marca, la página del jugador vuelve a mostrarle tus partidos.
+    // Aparte del lote: si la regla todavía no está publicada, levantar igual funciona.
+    await this._setSuspendFlag(id, uid, false);
   }
   async setSuspension(id, { note, date } = {}) {
     const { uid, docId } = this._ownSuspensionRef(id);
@@ -5348,6 +5380,81 @@ export class FirebaseStore {
       suspensionDate: day,
       history: cleanSuspensionHistory(current?.history).slice(0, 10),
     });
+    // v245: la marca que mira la página del jugador (sin motivo ni fecha).
+    if (await this._setSuspendFlag(id, uid, true)) this._flagsSynced?.add(suspendFlagId(id, uid));
+  }
+  /** v245: escribe o borra la marca. No corta la suspensión si falla (regla sin publicar). */
+  async _setSuspendFlag(rosterId, uid, on) {
+    const flagId = suspendFlagId(rosterId, uid);
+    if (!flagId) return false;
+    const { doc, setDoc, deleteDoc } = this.fs;
+    try {
+      if (on) await setDoc(doc(this.db, 'suspendFlags', flagId), { ownerUid: uid, rosterId, at: Date.now() });
+      else await deleteDoc(doc(this.db, 'suspendFlags', flagId));
+      return true;
+    } catch (error) {
+      console.error(error?.code || 'sin-codigo', error);
+      return false;
+    }
+  }
+  /**
+   * v245: las suspensiones de antes no tienen marca. Una vez por sesión, las
+   * activas propias la escriben (una escritura por suspensión, sin lecturas).
+   */
+  async syncSuspendFlags() {
+    const uid = String(this.actor?.uid || '').trim();
+    if (!uid || this._guest || !this.fs?.setDoc) return 0;
+    const key = `f7c-suspend-flags:${uid}`;
+    if (!this._flagsSynced) {
+      let saved = [];
+      try { saved = JSON.parse(globalThis.localStorage?.getItem(key) || '[]'); } catch { saved = []; }
+      this._flagsSynced = new Set(Array.isArray(saved) ? saved : []);
+    }
+    const { doc, setDoc } = this.fs;
+    let wrote = 0;
+    for (const row of this.state.suspensions || []) {
+      if (row?.ownerUid !== uid || row.suspended !== true || !row.rosterId) continue;
+      const flagId = suspendFlagId(row.rosterId, uid);
+      if (!flagId || this._flagsSynced.has(flagId)) continue;
+      this._flagsSynced.add(flagId);
+      try {
+        await setDoc(doc(this.db, 'suspendFlags', flagId), { ownerUid: uid, rosterId: row.rosterId, at: Date.now() });
+        wrote += 1;
+      } catch (error) {
+        this._flagsSynced.delete(flagId);
+        console.error(error?.code || 'sin-codigo', error);
+      }
+    }
+    if (wrote) {
+      try { globalThis.localStorage?.setItem(key, JSON.stringify([...this._flagsSynced].slice(-200))); } catch { /* sin guardar: la próxima sesión vuelve a escribir */ }
+    }
+    return wrote;
+  }
+  /** v245: organizadores que suspendieron a la ficha del link (los que ya se consultaron). */
+  guestBlockedUids() {
+    if (!this._guest || this.actor?.uid) return [];
+    return [...(this._guestBlocks || new Map()).entries()].filter(([, on]) => on === true).map(([uid]) => uid);
+  }
+  /** v245: pregunta una vez por organizador si hay marca. Devuelve true si cambió algo. */
+  async _checkGuestBlocks(uids) {
+    const id = String(this._guestRosterId || '').trim();
+    if (!id || !this.fs?.getDoc) return false;
+    this._guestBlocks ||= new Map();
+    const { doc, getDoc } = this.fs;
+    const todo = [...new Set((uids || []).map((uid) => String(uid || '').trim()).filter(Boolean))].filter((uid) => !this._guestBlocks.has(uid));
+    if (!todo.length) return false;
+    for (const uid of todo) this._guestBlocks.set(uid, false);
+    let changed = false;
+    await Promise.all(todo.map(async (uid) => {
+      try {
+        const snap = await getDoc(doc(this.db, 'suspendFlags', suspendFlagId(id, uid)));
+        if (snap.exists()) { this._guestBlocks.set(uid, true); changed = true; }
+      } catch (error) {
+        // Sin la regla publicada todavía: se sigue mostrando como antes.
+        console.error(error?.code || 'sin-codigo', error);
+      }
+    }));
+    return changed;
   }
   async addBehavior(id, input) {
     return withBehaviorFlight(this, behaviorFlightKey(id, input), () => this._addBehavior(id, input));

@@ -462,3 +462,75 @@ export function hasUnspecified({ players, phone = null, phoneKey = null, rosterI
   return list.some((player) => addedByLabel(player) === UNSPECIFIED
     || (player.waiting !== true && player.paid === true && receivedShares(player).some((share) => shareLabel(share.name) === UNSPECIFIED)));
 }
+
+/**
+ * v245 (pedido 4): la línea «Pagó $X en N partidos» de la ficha, con todos los
+ * organizadores: lo que pagó (a quien lo cobró) y lo que debe o va a pagar
+ * (a con quien se anotó, la misma regla de la deuda). Sale de lo ya cargado.
+ * staff: [{ uid, name }] para juntar «Gus» y «Gustavo» en la misma cuenta.
+ */
+export function playerMoneyAll({ person, players, matches, prices, staff = [], watch, covered, settledDates } = {}) {
+  const people = (staff || []).filter((row) => row && (row.uid || row.name));
+  const staffFor = (who) => {
+    const id = organizerOf(who);
+    if (!id.uid && !id.name) return null;
+    if (id.uid) {
+      const hit = people.find((row) => row.uid === id.uid);
+      if (hit) return hit;
+    }
+    return id.name ? people.find((row) => sameOrganizerIdentity(row.name, id.name)) || null : null;
+  };
+  const by = new Map();
+  const bucket = (who) => {
+    const id = organizerOf(who);
+    const hit = staffFor(id);
+    const name = String(hit?.name || id.name || '').trim() || UNSPECIFIED;
+    const key = hit?.uid ? `u:${hit.uid}` : (id.uid ? `u:${id.uid}` : `n:${foldText(name)}`);
+    if (!by.has(key)) by.set(key, { key, uid: hit?.uid || id.uid || '', name, paid: 0, owed: 0 });
+    return by.get(key);
+  };
+  const byMatch = new Map((matches || []).map((match) => [match.id, match]));
+  const mine = (players || []).filter((player) => playerMatchesPerson(player, person));
+  let paid = 0;
+  let paidCount = 0;
+  let owed = 0;
+  let owedCount = 0;
+  for (const player of mine) {
+    if (player.waiting !== true && player.paid === true) {
+      const shares = receivedShares(player);
+      for (const share of shares) {
+        bucket(share.name).paid += share.amount;
+        paid += share.amount;
+      }
+      if (shares.length) paidCount += 1;
+    }
+    const amount = amountOwed(player, { players, matches, prices, watch, covered, settledDates });
+    if (!(amount > 0)) continue;
+    const match = byMatch.get(player.matchId) || null;
+    let who;
+    if (orphanSelfSignup(player)) who = orphanSelfSignupOwner(player, match) || { name: '' };
+    else if (String(player.signedUpWith || '').trim() || String(player.signedUpWithName || '').trim()) who = { uid: player.signedUpWith || '', name: player.signedUpWithName || '' };
+    else who = { uid: player.addedByUid || '', name: player.addedBy || '' };
+    bucket(who).owed += amount;
+    owed += amount;
+    owedCount += 1;
+  }
+  const rows = [...by.values()]
+    .map((row) => ({ ...row, paid: roundARS(row.paid), owed: roundARS(row.owed) }))
+    .filter((row) => row.paid > 0 || row.owed > 0)
+    .map((row) => ({ ...row, text: [row.paid > 0 ? `${row.name}: pagó ${formatARS(row.paid)}` : `${row.name}: pagó $0`, row.owed > 0 ? `debe ${formatARS(row.owed)}` : ''].filter(Boolean).join(' · ') }))
+    .sort((a, b) => (b.paid + b.owed) - (a.paid + a.owed) || foldText(a.name).localeCompare(foldText(b.name), 'es'));
+  paid = roundARS(paid);
+  owed = roundARS(owed);
+  const times = (n) => `${n} ${n === 1 ? 'partido' : 'partidos'}`;
+  const paidPart = paidCount ? `Pagó ${formatARS(paid)} en ${times(paidCount)}` : '';
+  const owedPart = owedCount ? `Debe ${formatARS(owed)} en ${times(owedCount)}` : '';
+  return {
+    paid,
+    paidCount,
+    owed,
+    owedCount,
+    rows,
+    text: [paidPart, owedPart].filter(Boolean).join(' · ') || 'Sin pagos cargados',
+  };
+}
