@@ -68,6 +68,8 @@
 //  roster/{rosterId}
 //    name (el teléfono está en rosterContacts)
 //    shortName: apodo opcional, hasta 40. En el partido y en Equipos reemplaza al nombre.
+//    names: { [uid]: { name, shortName } } (v249) nombre y apodo propios de cada organizador.
+//      Sin entrada, valen name/shortName. Ver rosterSeenBy/rosterNamePlan en roster.js.
 //    createdBy, createdAt, updatedAt
 //    level: número de 1 a 10, con un decimal (6.8). En pantalla va con coma.
 //    positions: ["Arquero"|"Defensa"|"Mediocampo"|"Ataque"]
@@ -106,6 +108,7 @@ import { isShortCode } from './short.js';
 import { ALREADY_IN_MATCH, ALREADY_SIGNED_UP, alreadyInMatch, duplicateText, phoneTakenText, selfAlreadyInMatch, selfSignupPlayerId, inviteBlock, isAutoGuestName, sameDayPromoGuestEditPatches, sameDayPromoGuestNickPatches } from './guests.js';
 import { GUARD_COLLECTION, guardKeyFor, guardMoves, newPlayerDocId, permissionDenied, phoneGuardDoc, phoneGuardId } from './phone-guard.js';
 import { EVERYONE, accessPatch, canAdd, canView, playerAccess } from './access.js';
+import { ownRosterEntry, rosterBase, rosterLinkEntry, rosterNameFor, rosterNamePlan, rosterSeenBy } from './roster.js';
 import { ROSTER_DENIED_READ, SUSPENDED_TEXT, blockingSuspensions, capitalizeWords, cleanShortName, cleanSuspensionHistory, cleanSuspensionNote, isRosterDenied, legacyNoteOwnerUid, liftedSuspensionEvent, personKey, phoneIdentity, rosterHeldBy, rosterHolderIds, rosterIdForSuspension, rosterNoteDocId, rosterPhoneAction, suspensionDocId, withHolder } from './roster.js';
 import { PRIVATE_WA_TEXT, attachPhone, canonicalWa, phoneKey } from './privacy.js';
 import {
@@ -418,6 +421,42 @@ function rosterShortPatches(players, rosterId, shortName, actor) {
     patches.push({ id: player.id, patch: { shortName: short } });
   }
   return patches;
+}
+
+/** v249: con nombre propio (ficha compartida), el apodo solo va a los partidos que anotó él. */
+function planShortPatches(players, rosterId, shortName, actor, plan) {
+  const rows = rosterShortPatches(players, rosterId, shortName, actor);
+  if (plan?.mode !== 'own') return rows;
+  const byId = new Map((players || []).map((row) => [row.id, row]));
+  return rows.filter((row) => canEditPlayer(byId.get(row.id), actor));
+}
+
+/** v249: el nombre/apodo editado, en campos de Firestore (names.{uid} o los de siempre). */
+function firestoreNameFields(plan, next, deleteField, touchShort) {
+  if (plan.mode === 'own') {
+    next[`names.${plan.uid}`] = { name: plan.entry.name, shortName: plan.entry.shortName || '' };
+    return next;
+  }
+  if (plan.name) next.name = plan.name;
+  if (touchShort || plan.dropOwn) next.shortName = plan.shortName || deleteField();
+  if (plan.dropOwn && plan.uid) next[`names.${plan.uid}`] = deleteField();
+  return next;
+}
+
+/** v249: lo mismo sobre el documento del modo demo. */
+function applyNamePlan(target, plan, touchShort) {
+  if (plan.mode === 'own') {
+    target.names = { ...(target.names && typeof target.names === 'object' ? target.names : {}), [plan.uid]: { name: plan.entry.name, shortName: plan.entry.shortName || '' } };
+    return;
+  }
+  if (plan.name) target.name = plan.name;
+  if (touchShort || plan.dropOwn) applyShortName(target, plan.shortName, true);
+  if (plan.dropOwn && target.names) {
+    const names = { ...target.names };
+    delete names[plan.uid];
+    if (Object.keys(names).length) target.names = names;
+    else delete target.names;
+  }
 }
 
 function applyShortName(target, value, present) {
@@ -799,6 +838,7 @@ class LocalStore {
         player: { ...player, confirmed: prev.confirmed != null ? prev.confirmed : player.confirmed, confirmedAt: prev.confirmedAt != null ? prev.confirmedAt : player.confirmedAt },
         match,
         roster,
+        senderUid: prev.sentByUid || '',
       });
       const slots = upcomingConfirmSlots({ players, matches, player, now });
       if (slots.length >= 2 && slots.some((slot) => slot.token === player.confirmToken)) next.also = slots;
@@ -859,7 +899,7 @@ class LocalStore {
     const matches = visible.matches;
     const cards = visible.cards;
     const players = overlayConfirmations(presentRows(visible.players.map((p) => [p.id, p]), db.contacts.players, uid).map(({ id, ...rest }) => ({ id, ...rest })), cards);
-    const roster = presentRows(Object.entries(db.roster), db.contacts.roster, uid).map(({ notes: _notes, ...person }) => person);
+    const roster = presentRows(Object.entries(db.roster), db.contacts.roster, uid).map(({ notes: _notes, ...person }) => rosterSeenBy(person, this.actor));
     const rosterNotes = {};
     for (const row of Object.values(db.rosterNotes || {})) {
       if (row?.ownerUid === uid && row.rosterId) rosterNotes[row.rosterId] = row.notes || [];
@@ -1541,6 +1581,18 @@ class LocalStore {
     await this.updatePlayer(id, { confirmToken: token });
     return token;
   }
+  /** v249: igual que en Firebase: quien manda el link queda en la tarjeta (sentByUid). */
+  async markConfirmSender(playerId, knownToken = '') {
+    const uid = this.actor?.uid || '';
+    if (!uid) return;
+    const db = this._load();
+    const token = db.players?.[playerId]?.confirmToken || knownToken;
+    if (!token) return;
+    db.confirmations ||= {};
+    if (db.confirmations[token]?.sentByUid === uid) return;
+    db.confirmations[token] = { ...(db.confirmations[token] || {}), sentByUid: uid };
+    this._save(db);
+  }
   async markReminderSent(id) {
     await this.updatePlayer(id, { reminderSentAt: Date.now() });
   }
@@ -1572,10 +1624,23 @@ class LocalStore {
     if (!cur) return '';
     const uid = this.actor?.uid || '';
     const now = Date.now();
+    // v249: lo que escribió queda como su nombre y apodo. La agenda del otro no cambia.
+    // Si ya era suya (se juntan dos fichas del mismo organizador), se edita como siempre.
+    const already = !!uid && rosterHolderIds(cur).includes(uid);
+    let name = '';
+    if (already || !uid) {
+      const change = {};
+      if (cleanPersonName(data?.name)) change.name = cleanPersonName(data.name);
+      if (data && 'shortName' in data) change.shortName = data.shortName;
+      const plan = rosterNamePlan(cur, uid, change);
+      applyNamePlan(cur, plan, data && 'shortName' in data);
+      name = cleanPersonName(change.name || '');
+    } else {
+      const entry = rosterLinkEntry(cur, uid, data);
+      name = cleanPersonName(entry.name);
+      if (name) cur.names = { ...(cur.names || {}), [uid]: { name, shortName: entry.shortName || '' } };
+    }
     cur.holders = withHolder(cur, uid);
-    const name = cleanPersonName(data?.name ?? cur.name);
-    if (name) cur.name = name;
-    if (data && 'shortName' in data) applyShortName(cur, data.shortName, true);
     cur.updatedAt = now;
     const contact = ensureContacts(db).roster[id];
     if (contact && uid) {
@@ -1584,14 +1649,14 @@ class LocalStore {
     }
     const patches = mergePlayerPatches(
       name ? rosterNamePatches(rosterPlayers(db), id, name, this.actor) : [],
-      data && 'shortName' in data ? rosterShortPatches(rosterPlayers(db), id, data.shortName, this.actor) : [],
+      data && 'shortName' in data ? planShortPatches(rosterPlayers(db), id, data.shortName, this.actor, { mode: 'own' }) : [],
     );
     applyRosterNamePatches(db, patches, now);
     return id;
   }
   _absorbRoster(db, fromId, intoId, data) {
     if (!db.roster[fromId] || !db.roster[intoId] || fromId === intoId) return intoId;
-    const name = cleanPersonName(data?.name ?? db.roster[intoId].name);
+    const name = cleanPersonName(data?.name ?? rosterNameFor(db.roster[intoId], this.actor?.uid).name);
     this._joinRoster(db, intoId, data);
     const now = Date.now();
     for (const player of Object.values(db.players || {})) {
@@ -1667,15 +1732,19 @@ class LocalStore {
         return kept;
       }
     }
-    const nextName = cleanPersonName(data?.name ?? cur.name);
+    const uid = this.actor?.uid || '';
+    const seen = rosterNameFor(cur, uid);
+    const nextName = cleanPersonName(data?.name ?? seen.name);
     if (!nextName) throw Object.assign(new Error('Poné el nombre.'), { code: 'invalid-name' });
+    const touchShort = 'shortName' in (data || {});
+    const plan = rosterNamePlan(cur, uid, touchShort ? { name: nextName, shortName: data.shortName } : { name: nextName });
     const patches = mergePlayerPatches(
-      nextName !== cleanPersonName(cur.name) ? rosterNamePatches(rosterPlayers(db), id, nextName, this.actor) : [],
-      'shortName' in (data || {}) ? rosterShortPatches(rosterPlayers(db), id, data.shortName, this.actor) : [],
+      nextName !== cleanPersonName(seen.name) ? rosterNamePatches(rosterPlayers(db), id, nextName, this.actor) : [],
+      touchShort ? planShortPatches(rosterPlayers(db), id, data.shortName, this.actor, plan) : [],
     );
     const now = Date.now();
-    Object.assign(cur, { name: nextName, updatedAt: now });
-    applyShortName(cur, data?.shortName, 'shortName' in (data || {}));
+    applyNamePlan(cur, plan, touchShort);
+    cur.updatedAt = now;
     delete cur.phone;
     if ('phone' in (data || {})) writeContact(db, 'roster', id, phone, cur, cur.createdByUid || this.actor?.uid || '');
     applyRosterNamePatches(db, patches, now);
@@ -1686,10 +1755,11 @@ class LocalStore {
     const db = this._load(); const cur = db.roster[id]; if (!cur) return;
     if (!canEditRosterNick(cur, this.actor)) throw editLockedError();
     const short = cleanShortName(value);
-    for (const { id: pid, patch } of rosterShortPatches(rosterPlayers(db), id, short, this.actor)) {
+    const plan = rosterNamePlan(cur, this.actor?.uid || '', { shortName: short });
+    for (const { id: pid, patch } of planShortPatches(rosterPlayers(db), id, short, this.actor, plan)) {
       Object.assign(db.players[pid], patch, { updatedAt: Date.now() });
     }
-    applyShortName(cur, short, true);
+    applyNamePlan(cur, plan, true);
     cur.updatedAt = Date.now();
     this._save(db);
   }
@@ -1729,10 +1799,13 @@ class LocalStore {
     }
     const next = {};
     let namePatches = [];
-    if ('name' in patch) {
-      next.name = cleanPersonName(patch.name);
-      if (next.name && next.name !== cleanPersonName(cur.name)) namePatches = rosterNamePatches(rosterPlayers(db), id, next.name, this.actor);
-    }
+    const uid = this.actor?.uid || '';
+    const seen = rosterNameFor(cur, uid);
+    const nameChange = {};
+    if ('name' in patch && cleanPersonName(patch.name)) nameChange.name = cleanPersonName(patch.name);
+    if ('shortName' in patch) nameChange.shortName = patch.shortName;
+    const plan = rosterNamePlan(cur, uid, nameChange);
+    if (nameChange.name && nameChange.name !== cleanPersonName(seen.name)) namePatches = rosterNamePatches(rosterPlayers(db), id, nameChange.name, this.actor);
     if ('level' in patch) {
       const level = storedLevel(patch.level);
       if (level == null) throw Object.assign(new Error('El nivel va de 1 a 10, con un solo decimal.'), { code: 'invalid-level' });
@@ -1741,7 +1814,7 @@ class LocalStore {
     if ('positions' in patch) next.positions = patch.positions || [];
     if ('notes' in patch) this._writeOwnNotes(db, id, patch.notes);
     if ('shortName' in patch) {
-      namePatches = mergePlayerPatches(namePatches, rosterShortPatches(rosterPlayers(db), id, patch.shortName, this.actor));
+      namePatches = mergePlayerPatches(namePatches, planShortPatches(rosterPlayers(db), id, patch.shortName, this.actor, plan));
     }
     const phone = 'phone' in patch ? (patch.phone || '') : this._rosterPhone(db, id);
     if ('phone' in patch && phone) {
@@ -1754,7 +1827,7 @@ class LocalStore {
     }
     const now = Date.now();
     Object.assign(cur, next, { updatedAt: now });
-    if ('shortName' in patch) applyShortName(cur, patch.shortName, true);
+    if ('name' in nameChange || 'shortName' in nameChange) applyNamePlan(cur, plan, 'shortName' in patch);
     delete cur.phone;
     if ('phone' in patch) writeContact(db, 'roster', id, phone, cur, cur.createdByUid || this.actor?.uid || '');
     applyRosterNamePatches(db, namePatches, now);
@@ -1853,6 +1926,12 @@ class LocalStore {
     }
     if (cur && uid && holders.length > 1 && holders.includes(uid)) {
       cur.holders = holders.filter((item) => item !== uid);
+      if (cur.names && cur.names[uid]) {
+        const names = { ...cur.names };
+        delete names[uid];
+        if (Object.keys(names).length) cur.names = names;
+        else delete cur.names;
+      }
       cur.updatedAt = Date.now();
       const contact = ensureContacts(db).roster[id];
       if (contact?.readers) contact.readers = contact.readers.filter((item) => item !== uid);
@@ -3669,7 +3748,8 @@ export class FirebaseStore {
       this._emit();
     });
     watch('roster', collection(this.db, 'roster'), null, (snap) => {
-      this.state.roster = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      // v249: cada organizador ve su propio nombre y apodo (names.{uid}).
+      this.state.roster = snap.docs.map((d) => rosterSeenBy({ id: d.id, ...d.data() }, this.actor));
       this.state.rosterError = null;
       this._rosterReady = true;
       this._emit();
@@ -3899,13 +3979,33 @@ export class FirebaseStore {
     if (!token) return;
     await this._syncConfirmGroup(playerId, { ...player, id: playerId, confirmToken: token }, match);
   }
-  async _putConfirmation(token, playerId, player, match, slots) {
+  async _putConfirmation(token, playerId, player, match, slots, senderUid = '') {
     if (!token) return;
     const { doc, setDoc } = this.fs;
-    const body = confirmationIdentity({ playerId, player, match, roster: this.state.roster });
+    // v249: quien mandó el link (sentByUid) manda en el saludo, la reescriba quien la reescriba.
+    const sender = senderUid || String((this.state.confirmations || []).find((card) => card?.id === token)?.sentByUid || '');
+    const body = confirmationIdentity({ playerId, player, match, roster: this.state.roster, senderUid: sender });
     const listed = slots.some((slot) => slot.token === token);
     body.also = listed && slots.length >= 2 ? slots : [];
     await setDoc(doc(this.db, 'confirmations', token), body, { merge: true });
+  }
+  /**
+   * v249: este organizador mandó el link de confirmar de ese jugador (recordatorio,
+   * aviso de que subió, WhatsApp desde la lista o el menú). La tarjeta guarda
+   * sentByUid y saluda con el nombre de su agenda.
+   */
+  async markConfirmSender(playerId, knownToken = '') {
+    const uid = this.actor?.uid || '';
+    if (!uid || !this.fs) return;
+    const row = (this.state.players || []).find((item) => item.id === playerId);
+    const token = String(knownToken || row?.confirmToken || '');
+    if (!row || !token) return;
+    const player = { ...row, confirmToken: token };
+    const card = (this.state.confirmations || []).find((row) => row?.id === token);
+    if (card?.sentByUid === uid) return;
+    const match = (this.state.matches || []).find((row) => row.id === player.matchId) || null;
+    const slots = upcomingConfirmSlots({ players: this.state.players || [], matches: this.state.matches || [], player });
+    await this._putConfirmation(token, playerId, player, match, slots, uid);
   }
   async _syncConfirmGroup(focusId, player, matchHint, { skipId = '' } = {}) {
     if (!player || this._syncingConfirm) return;
@@ -5083,16 +5183,15 @@ export class FirebaseStore {
     const uid = this.actor?.uid || '';
     const phone = canonicalWa(data?.phone || existing?.phone || this.state.rosterContacts?.[existing.id]?.phone || '');
     if (!uid || !phone) throw duplicatePhoneError(existing);
-    const { doc, setDoc, updateDoc, deleteDoc, deleteField } = this.fs;
+    const { doc, setDoc, updateDoc, deleteDoc } = this.fs;
     const claimId = `${existing.id}_${uid}`;
     await setDoc(doc(this.db, 'rosterClaims', claimId), { phone, rosterId: existing.id });
     const next = { holders: withHolder(existing, uid), updatedAt: Date.now() };
-    const name = cleanPersonName(data?.name ?? existing.name);
-    if (name) next.name = name;
-    if (data && 'shortName' in data) {
-      const short = cleanShortName(data.shortName);
-      next.shortName = short || deleteField();
-    }
+    // v249: el nombre y el apodo que escribió quedan como suyos (names.{uid}).
+    // name y shortName de la ficha no se tocan: la agenda del otro no cambia.
+    const entry = rosterLinkEntry(existing, uid, data);
+    const name = cleanPersonName(entry.name);
+    if (name) next[`names.${uid}`] = { name, shortName: entry.shortName || '' };
     await updateDoc(doc(this.db, 'roster', existing.id), next);
     try {
       const { getDoc } = this.fs;
@@ -5225,9 +5324,11 @@ export class FirebaseStore {
         if (kept === dup.id && rosterPhoneAction(dup, this.actor) !== 'link') {
           const { doc, updateDoc, deleteField } = this.fs;
           const next = { updatedAt: Date.now() };
+          const change = {};
           const name = cleanPersonName(data?.name ?? '');
-          if (name) next.name = name;
-          if ('shortName' in (data || {})) next.shortName = cleanShortName(data.shortName) || deleteField();
+          if (name) change.name = name;
+          if ('shortName' in (data || {})) change.shortName = data.shortName;
+          if (name || 'shortName' in change) firestoreNameFields(rosterNamePlan(dup, this.actor?.uid || '', change), next, deleteField, 'shortName' in change);
           await updateDoc(doc(this.db, 'roster', dup.id), next);
         }
         await this._retargetRoster(id, kept, data?.name);
@@ -5237,15 +5338,14 @@ export class FirebaseStore {
     const { doc, updateDoc, deleteField, writeBatch } = this.fs;
     const nextName = cleanPersonName(data?.name ?? cur.name);
     if (!nextName) throw Object.assign(new Error('Poné el nombre.'), { code: 'invalid-name' });
+    // v249: cur ya viene con el nombre y apodo de este organizador (rosterSeenBy).
+    const touchShort = 'shortName' in (data || {});
+    const plan = rosterNamePlan(cur, this.actor?.uid || '', touchShort ? { name: nextName, shortName: data.shortName } : { name: nextName });
     const namePatches = mergePlayerPatches(
       nextName !== cleanPersonName(cur.name) ? rosterNamePatches(this.state.players || [], id, nextName, this.actor) : [],
-      'shortName' in (data || {}) ? rosterShortPatches(this.state.players || [], id, data.shortName, this.actor) : [],
+      touchShort ? planShortPatches(this.state.players || [], id, data.shortName, this.actor, plan) : [],
     );
-    const next = { name: nextName, updatedAt: Date.now() };
-    if ('shortName' in (data || {})) {
-      const short = cleanShortName(data.shortName);
-      next.shortName = short || deleteField();
-    }
+    const next = firestoreNameFields(plan, { updatedAt: Date.now() }, deleteField, touchShort);
     if ('phone' in (data || {})) {
       try {
         const wrote = await this._writeContactDoc('roster', id, phone, cur);
@@ -5285,8 +5385,9 @@ export class FirebaseStore {
     const { doc, updateDoc, deleteField } = this.fs;
     const short = cleanShortName(value);
     const now = Date.now();
-    await updateDoc(doc(this.db, 'roster', id), { shortName: short || deleteField(), updatedAt: now });
-    for (const item of rosterShortPatches(this.state.players || [], id, short, this.actor)) {
+    const plan = rosterNamePlan(cur, this.actor?.uid || '', { shortName: short });
+    await updateDoc(doc(this.db, 'roster', id), firestoreNameFields(plan, { updatedAt: now }, deleteField, true));
+    for (const item of planShortPatches(this.state.players || [], id, short, this.actor, plan)) {
       try {
         await updateDoc(doc(this.db, 'players', item.id), { shortName: short || deleteField(), updatedAt: now });
       } catch (e) {
@@ -5318,10 +5419,11 @@ export class FirebaseStore {
     if (!canEditRoster(cur, this.actor)) throw editLockedError();
     const next = { updatedAt: Date.now() };
     let namePatches = [];
-    if ('name' in patch) {
-      next.name = cleanPersonName(patch.name);
-      if (next.name && next.name !== cleanPersonName(cur.name)) namePatches = rosterNamePatches(this.state.players || [], id, next.name, this.actor);
-    }
+    const nameChange = {};
+    if ('name' in patch && cleanPersonName(patch.name)) nameChange.name = cleanPersonName(patch.name);
+    if ('shortName' in patch) nameChange.shortName = patch.shortName;
+    const plan = rosterNamePlan(cur, this.actor?.uid || '', nameChange);
+    if (nameChange.name && nameChange.name !== cleanPersonName(cur.name)) namePatches = rosterNamePatches(this.state.players || [], id, nameChange.name, this.actor);
     if ('level' in patch) {
       const level = storedLevel(patch.level);
       if (level == null) throw Object.assign(new Error('El nivel va de 1 a 10, con un solo decimal.'), { code: 'invalid-level' });
@@ -5329,7 +5431,7 @@ export class FirebaseStore {
     }
     if ('positions' in patch) next.positions = patch.positions || [];
     if ('notes' in patch) await this._writeRosterNotes(id, patch.notes);
-    if ('shortName' in patch) namePatches = mergePlayerPatches(namePatches, rosterShortPatches(this.state.players || [], id, patch.shortName, this.actor));
+    if ('shortName' in patch) namePatches = mergePlayerPatches(namePatches, planShortPatches(this.state.players || [], id, patch.shortName, this.actor, plan));
     if ('phone' in patch && canonicalWa(patch.phone)) {
       const dup = this._rosterDup(patch.phone, id);
       if (dup) {
@@ -5341,7 +5443,7 @@ export class FirebaseStore {
       }
     }
     const { doc, updateDoc, deleteField, writeBatch } = this.fs;
-    if ('shortName' in patch) next.shortName = cleanShortName(patch.shortName) || deleteField();
+    if ('name' in nameChange || 'shortName' in nameChange) firestoreNameFields(plan, next, deleteField, 'shortName' in patch);
     if ('phone' in patch) {
       try {
         const wrote = await this._writeContactDoc('roster', id, patch.phone, cur);
@@ -5574,8 +5676,11 @@ export class FirebaseStore {
       assertRosterDeletable(this, { ...cur, phone }, this.state.players || [], this.state.matches || [], this.state.credits || [], this.state.prices || null);
     }
     if (cur && uid && holders.length > 1 && holders.includes(uid)) {
-      const { doc, updateDoc } = this.fs;
-      await updateDoc(doc(this.db, 'roster', id), { holders: holders.filter((item) => item !== uid), updatedAt: Date.now() });
+      const { doc, updateDoc, deleteField } = this.fs;
+      const leave = { holders: holders.filter((item) => item !== uid), updatedAt: Date.now() };
+      // v249: su nombre propio se va con él.
+      if (cur.names && typeof cur.names === 'object' && cur.names[uid]) leave[`names.${uid}`] = deleteField();
+      await updateDoc(doc(this.db, 'roster', id), leave);
       const contact = this.state.rosterContacts?.[id];
       if (contact?.readers?.includes(uid)) {
         try { await updateDoc(doc(this.db, 'rosterContacts', id), { readers: contact.readers.filter((item) => item !== uid) }); }

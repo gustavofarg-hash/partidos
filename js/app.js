@@ -19,7 +19,7 @@ import { PRIVATE_WA_TEXT } from './privacy.js';
 import { playerMoreItems, playerShareTarget } from './player-more.js';
 import { LINK_INVALID_TEXT, canResetLink, linkResetQuestion } from './link-reset.js';
 import { activityNoticeText, activityNotices } from './notify.js';
-import { ROSTER_DENIED_WRITE, SUSPENDED_TEXT, activeSuspensions, blockingSuspensions, canonicalPhone, capitalizeWords, cleanShortName, displayName, foldText, fullNameBehind, givenName, nickOf, isRosterDenied, personKey, phoneIdentity, playerMatchesPerson, rosterByIdentity, rosterByPhone, rosterForOrganizer, rosterHeldBy, rosterIdForSuspension, searchRoster, suspensionHistoryOf, visibleRosterHits, visibleRosterPhone, withPendingRoster } from './roster.js';
+import { ROSTER_DENIED_WRITE, SUSPENDED_TEXT, activeSuspensions, blockingSuspensions, canonicalPhone, capitalizeWords, cleanShortName, displayName, foldText, fullNameBehind, givenName, nickOf, isRosterDenied, personKey, playersSeenBy, rosterSeenBy, phoneIdentity, playerMatchesPerson, rosterByIdentity, rosterByPhone, rosterForOrganizer, rosterHeldBy, rosterIdForSuspension, searchRoster, suspensionHistoryOf, visibleRosterHits, visibleRosterPhone, withPendingRoster } from './roster.js';
 import { ALREADY_IN_MATCH, alreadyInMatch, attachRosterGuest, duplicateText, isDuplicateText, firstDuplicate, groupByInviter, inviteBlock, isAutoGuestName, isGuest, normName, placeGroup, resolveFriendNames, rootInviterId, sameDayPromoGuestRenames, waitWarning } from './guests.js';
 import { MAX_NOTES, MAX_NOTE_TEXT, POSITIONS, currentMatches, filterLevelTyping, formatLevel, keptSignupIds, levelCaretAfterStep, levelStepSide, matchAlreadyPlayed, matchSignupState, noteWhen, parseLevel, pastMatches, playerRecord, playerStats, rosterDeleteReasons, sortedNotes, splitNear, stepLevel, storedLevel, upcomingMatches } from './profile.js';
 import { organizerChoices, organizerTagClass, sameOrganizer, sameOrganizerIdentity } from './organizers.js';
@@ -53,7 +53,7 @@ import {
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v248';
+const APP_VERSION = 'f7c-v249';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -178,10 +178,24 @@ function slotSide(p, m, readOnly, payText) {
   if (!stack && !more) return '';
   return `<div class="slot-side">${stack}${more}</div>`;
 }
+/** v249: el WhatsApp lleva el link de confirmar: al tocarlo, la tarjeta queda a nombre de quien lo mandó. */
+function confirmSenderAttr(p, text) {
+  return p?.id && String(text || '').includes('confirmar.html') ? ` data-confirm-sender="${esc(p.id)}"` : '';
+}
+function noteConfirmSender(playerId, token = '') {
+  if (!playerId || !app.store?.markConfirmSender) return;
+  Promise.resolve(app.store.markConfirmSender(playerId, token)).catch((error) => console.error(error?.code || 'sin-codigo', error));
+}
+if (typeof document !== 'undefined') {
+  document.addEventListener('click', (event) => {
+    const link = event.target?.closest?.('[data-confirm-sender]');
+    if (link) noteConfirmSender(link.dataset.confirmSender);
+  }, true);
+}
 function waButton(p, text) {
   const view = withAgendaPhone(p);
   if (view?.phone) {
-    return `<a class="wa-btn" href="${esc(waHref(view.phone, text || ''))}" target="_blank" rel="noopener" aria-label="WhatsApp a ${esc(view.name)}">${ICON.wa}</a>`;
+    return `<a class="wa-btn" href="${esc(waHref(view.phone, text || ''))}" target="_blank" rel="noopener" aria-label="WhatsApp a ${esc(view.name)}"${confirmSenderAttr(p, text)}>${ICON.wa}</a>`;
   }
   if (phoneHidden(view)) return `<button type="button" class="wa-btn" disabled aria-label="${esc(PRIVATE_WA_TEXT)}">${ICON.wa}</button>`;
   return '';
@@ -756,8 +770,12 @@ async function saveNick(p, nick, rosterId) {
   const person = rosterId ? app.roster.find((item) => item.id === rosterId) : null;
   if (person && canEditRosterNick(person, actorWithRole())) {
     if (nick !== cleanShortName(person.shortName)) await app.store.setRosterNick(person.id, nick);
+    // v249: si lo tengo en mi agenda, el apodo es mío y ya se copió a mis partidos.
+    // No se escribe en la fila que anotó otro organizador.
+    if (person.ownView === true && !canEditPlayer(p, actor())) return;
     const fresh = app.players.find((item) => item.id === p.id) || p;
-    if (cleanShortName(fresh.shortName) !== nick) await app.store.setPlayerShortName(p.id, nick);
+    const docShort = 'docShortName' in fresh ? fresh.docShortName : fresh.shortName;
+    if (cleanShortName(docShort) !== nick) await app.store.setPlayerShortName(p.id, nick);
     return;
   }
   await app.store.setPlayerShortName(p.id, nick);
@@ -2700,6 +2718,7 @@ async function openReminders(m) {
         const nowProg = reminderProgress(showAll ? fresh : playersForOrganizer(fresh, app.who, { actor: actor(), roster: app.roster }));
         line.textContent = `${nowProg.sent} de ${nowProg.total} enviados${showAll ? ' · todos' : ' · los que anotaste'}`;
       }
+      noteConfirmSender(id, person?.confirmToken || '');
       run(app.store.markReminderSent(id));
     });
   };
@@ -2813,6 +2832,7 @@ async function offerPromotionWhatsApp(player, match) {
   const confirmUrl = confirmPageUrl({ matchId: match.id, playerId: player.id, token });
   const text = promotionMessage({ player, match, venue: placeOf(match), confirmUrl, roster: app.roster });
   placeWa(pending, waSendUrl({ phone, text }));
+  noteConfirmSender(player.id, token);
 }
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); return true; } catch {
@@ -5178,6 +5198,18 @@ function linkOrganizer() {
   return app.store?.shareOrganizer?.(token) || null;
 }
 
+/**
+ * v249: el saludo de Autoservicio usa la agenda del organizador que compartió
+ * ESTE link: primera palabra de su apodo; sin apodo, primera palabra de su nombre.
+ * Si ese organizador no le puso nombre propio (o el link no tiene organizador),
+ * el de la ficha, como antes.
+ */
+function signupGreetingName(person) {
+  const org = linkOrganizer();
+  const seen = org?.uid ? rosterSeenBy(person, { uid: org.uid, name: org.name || '' }) : person;
+  return givenName(seen) || seen?.name || person?.name || '';
+}
+
 function renderPlayerSignup(person) {
   // v245: el link es de un organizador que lo suspendió: «NO TENÉS ACCESO».
   if (guestLinkBlocked(linkOrganizer(), guestBlocked())) {
@@ -5194,7 +5226,7 @@ function renderPlayerSignup(person) {
     <article id="player-signup">
       <header class="player-top">
         <img src="icons/icon-192.png?v=${esc(APP_VERSION)}" alt="" width="40" height="40">
-        <h1 id="player-signup-name">Hola, ${esc(givenName(person) || person.name)}</h1>
+        <h1 id="player-signup-name">Hola, ${esc(signupGreetingName(person))}</h1>
       </header>
       ${title ? `<h2 id="player-signup-of">${esc(title)}</h2>` : ''}
       ${app.guestMatchError ? `<p class="self-error" role="alert">${esc(app.guestMatchError)}</p>` : ''}
@@ -8210,7 +8242,7 @@ function openPlayerMenu(m, p) {
     ${canAnnotate ? signupFields(p, match) : (p.signedUpWithName ? `<p class="hint" id="signed-up-line">Se anotó con: ${esc(p.signedUpWithName)}</p>` : '')}
     <div class="menu">
       ${canAnnotate ? `<button class="btn" id="pm-pay">${paidAlready ? 'Editar pago' : 'Cargar pago'}</button>` : ''}
-      ${phoneView.phone && match ? `<a class="btn" id="pm-wa" href="${esc(waHref(phoneView.phone, waMessage(match, p)))}" target="_blank" rel="noopener">${ICON.wa}Mandar WhatsApp</a>` : phoneHidden(phoneView) ? `<button class="btn" type="button" disabled>${esc(PRIVATE_WA_TEXT)}</button>` : `<button class="btn" id="pm-phone"${own ? '' : ' disabled'}>Cargar WhatsApp</button>`}
+      ${phoneView.phone && match ? `<a class="btn" id="pm-wa" href="${esc(waHref(phoneView.phone, waMessage(match, p)))}" target="_blank" rel="noopener"${confirmSenderAttr(p, waMessage(match, p))}>${ICON.wa}Mandar WhatsApp</a>` : phoneHidden(phoneView) ? `<button class="btn" type="button" disabled>${esc(PRIVATE_WA_TEXT)}</button>` : `<button class="btn" id="pm-phone"${own ? '' : ' disabled'}>Cargar WhatsApp</button>`}
       <button class="btn" id="pm-profile">Ver perfil</button>
       ${p.tentative === true ? '<button class="btn" id="pm-confirm-spot">Confirmar lugar</button>' : ''}
       ${canAnnotate && !isWaiting(p) && !isNoPlay(p) ? `<button class="btn" id="pm-attendance">${p.confirmed === 'si' ? 'Quitar confirmación' : 'Confirmó asistencia'}</button>` : ''}
@@ -9179,6 +9211,11 @@ async function boot() {
     const pendingRoster = withPendingRoster(app.roster, app.rosterPending, Date.now());
     app.roster = pendingRoster.roster;
     app.rosterPending = pendingRoster.pending;
+    // v249: en los partidos, el nombre y apodo de mi agenda (cada organizador el suyo).
+    if (!app.guestPlayer) {
+      app.players = playersSeenBy(app.players, app.roster);
+      app.statsPlayers = playersSeenBy(app.statsPlayers, app.roster);
+    }
     app.rosterNotes = view.rosterNotes || {};
     app.suspensions = view.suspensions || [];
     app.suspensionHistory = view.suspensionHistory || [];

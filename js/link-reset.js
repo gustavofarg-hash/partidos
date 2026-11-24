@@ -28,14 +28,31 @@ export function linkResetQuestion(name) {
 export function rosterMirror(person) {
   const p = person || {};
   const holders = Array.isArray(p.holders) ? p.holders.filter((uid) => typeof uid === 'string' && uid).slice(0, 30) : [];
-  return {
-    name: String(p.name || '').slice(0, 60),
-    shortName: String(p.shortName || '').slice(0, 40),
+  // v249: la ficha tal cual (no el nombre con que la ve el organizador que la copia)
+  // y el nombre/apodo propio de cada organizador, para el saludo de la página.
+  const out = {
+    name: String(('baseName' in p ? p.baseName : p.name) || '').slice(0, 60),
+    shortName: String(('baseShortName' in p ? p.baseShortName : p.shortName) || '').slice(0, 40),
     holders,
     createdByUid: String(p.createdByUid || ''),
     phoneKey: String(p.phoneKey || ''),
     hasPhone: p.hasPhone === true,
   };
+  const names = mirrorNames(p.names);
+  if (names) out.names = names;
+  return out;
+}
+
+function mirrorNames(map) {
+  if (!map || typeof map !== 'object' || Array.isArray(map)) return null;
+  const out = {};
+  for (const uid of Object.keys(map).sort()) {
+    const row = map[uid];
+    const name = String(row?.name || '').trim().slice(0, 60);
+    if (!uid || !name) continue;
+    out[uid] = { name, shortName: String(row?.shortName || '').slice(0, 40) };
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 export function sameMirror(a, b) {
