@@ -82,12 +82,142 @@ export function cleanShortName(value) {
 }
 
 /**
+ * v249: cada organizador agenda al jugador con su propio nombre y apodo.
+ * La ficha sigue siendo una sola (mismo id, mismo WhatsApp). En la ficha:
+ *   names: { [uid]: { name, shortName } }  (shortName '' = sin apodo)
+ * Sin entrada para ese uid, valen name y shortName de la ficha (los de
+ * siempre): los datos viejos no cambian hasta que alguien edita.
+ */
+export const ROSTER_NAME_MAX = 60;
+
+export function ownRosterEntry(person, uid) {
+  const id = String(uid || '').trim();
+  const map = person?.names;
+  if (!id || !map || typeof map !== 'object' || Array.isArray(map)) return null;
+  const row = map[id];
+  if (!row || typeof row !== 'object') return null;
+  const name = String(row.name || '').trim().replace(/\s+/g, ' ').slice(0, ROSTER_NAME_MAX);
+  if (!name) return null;
+  return { name, shortName: cleanShortName(row.shortName) };
+}
+
+/** Nombre y apodo de la ficha según la agenda de ese organizador. */
+export function rosterNameFor(person, uid) {
+  const baseName = String((person && 'baseName' in person ? person.baseName : person?.name) || '');
+  const baseShort = cleanShortName(person && 'baseShortName' in person ? person.baseShortName : person?.shortName);
+  const own = ownRosterEntry(person, uid);
+  return own ? { name: own.name, shortName: own.shortName, own: true } : { name: baseName, shortName: baseShort, own: false };
+}
+
+/**
+ * La ficha como la ve ese organizador: name y shortName pasan a ser los suyos.
+ * Guarda baseName/baseShortName (los de la ficha) para volver a calcular.
+ * ownView: la tiene en su agenda.
+ */
+export function rosterSeenBy(person, actor) {
+  if (!person || typeof person !== 'object') return person;
+  const baseName = String(('baseName' in person ? person.baseName : person.name) || '');
+  const baseShortName = cleanShortName('baseShortName' in person ? person.baseShortName : person.shortName);
+  const uid = String(actor?.uid || '').trim();
+  const seen = rosterNameFor({ ...person, baseName, baseShortName }, uid);
+  const out = { ...person, baseName, baseShortName, name: seen.name, ownView: !!uid && rosterHeldBy(person, actor) };
+  if (seen.shortName) out.shortName = seen.shortName;
+  else delete out.shortName;
+  return out;
+}
+
+/** Saca los campos calculados antes de copiar la ficha a otro lado. */
+export function rosterBase(person) {
+  if (!person || typeof person !== 'object') return person;
+  const { baseName, baseShortName, ownView: _own, ...rest } = person;
+  const out = { ...rest };
+  if ('baseName' in person) out.name = baseName;
+  if ('baseShortName' in person) {
+    if (baseShortName) out.shortName = baseShortName;
+    else delete out.shortName;
+  }
+  return out;
+}
+
+/**
+ * Dónde guarda el nombre/apodo que edita este organizador.
+ * - 'base': es el único que la tiene (o no la tiene: el admin con el apodo,
+ *   las fichas viejas sin dueño). Se escribe name/shortName como siempre y se
+ *   borra su entrada en names si había.
+ * - 'own': la ficha la tiene otro organizador más. Se escribe names[uid] y la
+ *   agenda del otro no cambia.
+ * change: { name?, shortName? }. Lo que falta queda como lo ve él ahora.
+ */
+export function rosterNamePlan(person, uid, change = {}) {
+  const id = String(uid || '').trim();
+  const holders = rosterHolderIds(rosterBase(person) || {});
+  const current = rosterNameFor(person, id);
+  const name = 'name' in change && change.name != null && String(change.name).trim()
+    ? String(change.name).trim().replace(/\s+/g, ' ').slice(0, ROSTER_NAME_MAX)
+    : current.name;
+  const shortName = 'shortName' in change ? cleanShortName(change.shortName) : current.shortName;
+  const hasEntry = !!(id && person?.names && typeof person.names === 'object' && person.names[id]);
+  const shared = !!id && holders.includes(id) && holders.length > 1;
+  if (shared) return { mode: 'own', uid: id, entry: { name, shortName } };
+  return { mode: 'base', uid: id, name, shortName, dropOwn: hasEntry };
+}
+
+/** Al vincular una ficha de otro organizador: lo que escribió queda como suyo. */
+export function rosterLinkEntry(person, uid, data = {}) {
+  const typed = String(data?.name || '').trim().replace(/\s+/g, ' ').slice(0, ROSTER_NAME_MAX);
+  const seen = rosterNameFor(rosterBase(person), '');
+  const name = typed || seen.name;
+  const shortName = data && 'shortName' in data ? cleanShortName(data.shortName) : '';
+  return { name, shortName };
+}
+
+/** La ficha que este organizador tiene en su agenda para ese jugador del partido. */
+export function ownRosterOf(player, roster) {
+  const list = roster || [];
+  const id = String(player?.rosterId || '').trim();
+  if (id) {
+    const byId = list.find((item) => item?.id === id);
+    if (byId) return byId.ownView === true ? byId : null;
+  }
+  const key = phoneIdentity(player);
+  if (!key) return null;
+  return list.find((item) => item?.id && item.ownView === true && phoneIdentity(item) === key) || null;
+}
+
+/**
+ * v249: los jugadores de los partidos con el nombre y apodo de MI agenda
+ * (si lo tengo agendado). docName/docShortName guardan lo que dice el partido.
+ * Sin ficha mía, queda como está.
+ */
+export function playersSeenBy(players, roster) {
+  const list = Array.isArray(players) ? players : [];
+  const mine = (roster || []).filter((person) => person?.ownView === true);
+  if (!mine.length) return list;
+  return list.map((player) => {
+    const own = player ? ownRosterOf(player, mine) : null;
+    if (!own) return player;
+    const name = String(own.name || '').trim();
+    const short = cleanShortName(own.shortName);
+    const docShort = cleanShortName(player.shortName);
+    if ((!name || name === player.name) && short === docShort) return player;
+    const out = { ...player, docName: player.name, docShortName: docShort };
+    if (name) out.name = name;
+    if (short) out.shortName = short;
+    else delete out.shortName;
+    return out;
+  });
+}
+
+/**
  * En la lista del partido y en Equipos se ve el apodo.
  * Manda el apodo del jugador en ese partido (se carga en Editar jugador).
  * Si no tiene, el de su ficha de Jugadores (por rosterId o, sin ficha
  * vinculada, por el WhatsApp). Si nadie tiene apodo, el nombre.
  */
 export function nickOf(player, roster) {
+  // v249: si lo tengo en mi agenda, mi apodo (aunque el partido traiga el de otro).
+  const mine = ownRosterOf(player, roster);
+  if (mine) return cleanShortName(mine.shortName);
   const own = cleanShortName(player?.shortName);
   if (own) return own;
   const list = roster || [];
@@ -99,7 +229,8 @@ export function nickOf(player, roster) {
 }
 
 export function displayName(player, roster) {
-  return nickOf(player, roster) || player?.name || '';
+  const mine = ownRosterOf(player, roster);
+  return nickOf(player, roster) || mine?.name || player?.name || '';
 }
 
 /**
@@ -112,14 +243,14 @@ export function givenName(player, roster) {
   if (nick) return nick;
   const list = roster || [];
   const id = String(player?.rosterId || '').trim();
-  const person = id ? list.find((item) => item?.id === id) : null;
+  const person = ownRosterOf(player, list) || (id ? list.find((item) => item?.id === id) : null);
   const source = String(person?.name || player?.name || '').trim().replace(/\s+/g, ' ');
   return source.split(' ').filter(Boolean)[0] || '';
 }
 
 /** El nombre completo, solo si en la lista se ve el apodo en su lugar. */
 export function fullNameBehind(player, roster) {
-  const name = String(player?.name || '').trim();
+  const name = String(ownRosterOf(player, roster)?.name || player?.name || '').trim();
   if (!name) return '';
   return foldText(displayName(player, roster)) === foldText(name) ? '' : name;
 }

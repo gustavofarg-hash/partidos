@@ -2,7 +2,7 @@
 // confirmar.html y las pruebas. No abre WhatsApp ni escribe en Firestore.
 import { attendanceWhen, clockTime, confirmScheduleText, confirmSlotLabel, labelDate, todayISO, toEpoch } from './dates.js';
 import { sameOrganizer } from './organizers.js';
-import { givenName, nickOf, personKey, rosterHolderIds, visibleRosterPhone } from './roster.js';
+import { givenName, nickOf, ownRosterEntry, personKey, rosterBase, rosterHolderIds, rosterNameFor, visibleRosterPhone } from './roster.js';
 import { playerAccess } from './access.js';
 import { waSendUrl } from './phone.js';
 import { PRODUCTION_ORIGIN, publicAppOrigin } from './trial.js';
@@ -59,10 +59,10 @@ export function waReminderUrl(phone, text, opts = {}) {
  * Documento público de confirmación. No lleva teléfono: la página anónima
  * solo puede leer este documento, y el id es el token del link.
  */
-export function confirmationRecord({ playerId, player, match, roster }) {
+export function confirmationRecord({ playerId, player, match, roster, senderUid = '' }) {
   const confirmed = player?.confirmed === 'si' || player?.confirmed === 'no' ? player.confirmed : null;
   return {
-    ...confirmationIdentity({ playerId, player, match, roster }),
+    ...confirmationIdentity({ playerId, player, match, roster, senderUid }),
     confirmed,
     confirmedAt: typeof player?.confirmedAt === 'number' ? player.confirmedAt : null,
   };
@@ -72,13 +72,36 @@ export function confirmationRecord({ playerId, player, match, roster }) {
  * Lo que escribe un organizador. Sin `confirmed` ni `confirmedAt`: un merge
  * no puede borrar el «Sí, juego» que guardó la página anónima.
  */
-export function confirmationIdentity({ playerId, player, match, roster }) {
+/**
+ * v249: la página de confirmar saluda con la agenda del organizador que MANDÓ
+ * ese link (recordatorio, aviso de que subió, WhatsApp del jugador): senderUid,
+ * guardado en la tarjeta como sentByUid. Si lo tiene agendado, su nombre y su
+ * apodo (los propios o, sin entrada propia, los de la ficha). Si no se sabe
+ * quién lo mandó o no lo tiene agendado, lo de siempre (el partido y la ficha),
+ * sin depender de qué organizador reescribió la tarjeta.
+ */
+export function confirmCardName(player, roster, senderUid = '') {
+  const list = (roster || []).map((row) => rosterBase(row));
+  const id = String(player?.rosterId || '').trim();
+  const person = id ? list.find((row) => row?.id === id) : null;
+  const uid = String(senderUid || '').trim();
+  if (person && uid && (ownRosterEntry(person, uid) || rosterHolderIds(person).includes(uid))) {
+    const seen = rosterNameFor(person, uid);
+    if (seen.name) return { name: seen.name, shortName: seen.shortName };
+  }
+  return { name: player?.name || '', shortName: nickOf(player, list) };
+}
+
+export function confirmationIdentity({ playerId, player, match, roster, senderUid = '' }) {
+  const card = confirmCardName(player, roster, senderUid);
+  const sender = String(senderUid || '').trim();
   return {
+    ...(sender ? { sentByUid: sender } : {}),
     playerId,
     matchId: player?.matchId || match?.id || '',
-    name: player?.name || '',
+    name: card.name,
     // v239: la página de confirmar saluda con el Nombre corto. Vacío si no hay.
-    shortName: nickOf(player, roster),
+    shortName: card.shortName,
     date: match?.date || player?.matchDate || '',
     time: match?.time || '',
     note: match?.note || '',
