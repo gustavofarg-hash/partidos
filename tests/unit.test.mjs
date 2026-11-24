@@ -12,7 +12,7 @@ import { CONFIRM_LISTEN, PLAYER_LISTEN, RECENT_LISTEN_DAYS, USAGE_FLUSH_MS, Usag
 import { refuseRealTarget, refuseUnlessEmulator } from './no-real-firebase.mjs';
 import { firebaseConfig as productionConfig } from '../config.js';
 import { ADMIN_EMAIL as trialAdminEmail, FCM_VAPID_KEY as trialVapid, GOOGLE_DRIVE_CLIENT_ID as trialDriveClientId, firebaseConfig as trialConfig } from '../config.prueba.js';
-import { PRODUCTION_PROJECT_ID, TRIAL_STORAGE_PREFIX, blocksProductionFirebase, isTrialPath, publicAppOriginFrom } from '../js/trial.js';
+import { PRODUCTION_ORIGIN, PRODUCTION_PROJECT_ID, TRIAL_STORAGE_PREFIX, blocksProductionFirebase, isTrialPath, publicAppOriginFrom } from '../js/trial.js';
 import { moveWaiting, nextWaitOrder, overflowPatches, rosterSplit, sortWaiting } from '../js/waiting.js';
 import { SUSPENDED_TEXT, capitalizeWords, cleanShortName, displayName, fullNameBehind, givenName, nickOf, personKey, phoneIdentity, playerMatchesPerson, rosterForOrganizer, rosterHit, rosterInMatchMessage, rosterMatchCount, searchRoster, visibleRosterHits, visibleRosterPhone, withPendingRoster } from '../js/roster.js';
 import { bajaDeduction, bajaPreview, bajaReasonText, behaviorLine, behaviorScore, behaviorTimeline, faltaReasonText, formatBehaviorPoints, formatBehaviorScore, parseBajaPoints, parseBehaviorPoints, removalDeducts, stepPointInput } from '../js/behavior.js';
@@ -60,11 +60,20 @@ const now = new Date('2026-10-19T13:00:00-03:00');
 const dt = (r) => r.map((x) => `${x.date} ${x.time}`);
 
 test('la versión de prueba no usa el Firebase de producción', () => {
+  assert.equal(PRODUCTION_ORIGIN, 'https://gustavofarg-hash.github.io/partidos');
   assert.equal(isTrialPath('/futbol-colegiales/'), false);
   assert.equal(isTrialPath('/futbol-colegiales/prueba/'), true);
   assert.equal(isTrialPath('/futbol-colegiales/prueba'), true);
+  assert.equal(isTrialPath('/partidos/'), false);
+  assert.equal(isTrialPath('/partidos/prueba/'), true);
+  assert.equal(isTrialPath('/partidos/prueba'), true);
   assert.equal(publicAppOriginFrom('/futbol-colegiales/', 'https://gustavofarg-hash.github.io'), 'https://gustavofarg-hash.github.io/futbol-colegiales');
   assert.equal(publicAppOriginFrom('/futbol-colegiales/prueba/c/', 'https://gustavofarg-hash.github.io'), 'https://gustavofarg-hash.github.io/futbol-colegiales/prueba');
+  assert.equal(publicAppOriginFrom('/partidos/', 'https://gustavofarg-hash.github.io'), 'https://gustavofarg-hash.github.io/partidos');
+  assert.equal(publicAppOriginFrom('/partidos/prueba/c/', 'https://gustavofarg-hash.github.io'), 'https://gustavofarg-hash.github.io/partidos/prueba');
+  assert.equal(publicAppOriginFrom('/', 'https://gustavofarg-hash.github.io'), PRODUCTION_ORIGIN);
+  assert.equal(publicAppOriginFrom('/confirmar.html', 'http://127.0.0.1:8080'), PRODUCTION_ORIGIN);
+  assert.equal(publicAppOriginFrom('/c/', 'http://127.0.0.1:8080'), PRODUCTION_ORIGIN);
   assert.equal(trialConfig.projectId, 'mis-partidos-prueba');
   assert.equal(isFirebaseConfigured(trialConfig), true);
   assert.equal(productionConfig.projectId, PRODUCTION_PROJECT_ID);
@@ -75,6 +84,9 @@ test('la versión de prueba no usa el Firebase de producción', () => {
   assert.equal(blocksProductionFirebase('/futbol-colegiales/prueba/', PRODUCTION_PROJECT_ID), true);
   assert.equal(blocksProductionFirebase('/futbol-colegiales/prueba/', trialConfig.projectId), false);
   assert.equal(blocksProductionFirebase('/futbol-colegiales/', PRODUCTION_PROJECT_ID), false);
+  assert.equal(blocksProductionFirebase('/partidos/prueba/', PRODUCTION_PROJECT_ID), true);
+  assert.equal(blocksProductionFirebase('/partidos/prueba/', trialConfig.projectId), false);
+  assert.equal(blocksProductionFirebase('/partidos/', PRODUCTION_PROJECT_ID), false);
   const storeSource = readFileSync(new URL('../js/store.js', import.meta.url), 'utf8');
   const appSource = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
   assert.match(storeSource, /from '\.\.\/config\.js'/);
@@ -1046,7 +1058,7 @@ test('link corto: código, url y el mismo destino', () => {
   assert.equal(isShortCode(code), true);
   assert.equal(isShortCode('corto'), false);
   assert.equal(isShortCode(`${code}x`), false);
-  assert.equal(shortConfirmUrl(code), `https://gustavofarg-hash.github.io/futbol-colegiales/c/?k=${code}`);
+  assert.equal(shortConfirmUrl(code), `${PRODUCTION_ORIGIN}/c/?k=${code}`);
   const token = 't'.repeat(24);
   const landing = confirmTarget({
     m: '2026-10-22_2100',
@@ -1063,7 +1075,7 @@ test('recordatorio: token, link y mensaje', () => {
   assert.notEqual(a, b);
   assert.match(a, /^[A-Za-z0-9_-]{24}$/);
   const url = confirmPageUrl({ matchId: '2026-10-22_2100', playerId: 'abc', token: a });
-  assert.equal(url, `https://gustavofarg-hash.github.io/futbol-colegiales/confirmar.html?m=2026-10-22_2100&p=abc&t=${encodeURIComponent(a)}`);
+  assert.equal(url, `${PRODUCTION_ORIGIN}/confirmar.html?m=2026-10-22_2100&p=abc&t=${encodeURIComponent(a)}`);
   const msg = reminderMessage({
     player: { name: 'Juan Pérez' },
     match: { date: '2026-10-22', time: '21:00', note: 'Cancha 2' },
@@ -1262,7 +1274,7 @@ test('recordatorio: ventana de 2 horas y links sin abrir el flujo', () => {
     { phone: '5491100000002' },
     { phone: '' },
   ]).map((p) => p.phone), ['5491100000002']);
-  assert.equal(links[0].confirmUrl, `https://gustavofarg-hash.github.io/futbol-colegiales/confirmar.html?m=2026-10-19_1500&p=p1&t=${token}`);
+  assert.equal(links[0].confirmUrl, `${PRODUCTION_ORIGIN}/confirmar.html?m=2026-10-19_1500&p=p1&t=${token}`);
   assert.equal(links[0].id, 'p1');
   assert.ok(links[0].waUrl.startsWith('https://wa.me/5491112345678?text='));
   const short = 'Ab3x9Zk2';
@@ -1272,7 +1284,7 @@ test('recordatorio: ventana de 2 horas y links sin abrir el flujo', () => {
     venue: 'Polideportivo Colegiales',
   });
   // v235: aunque el jugador tenga un link corto viejo, el mensaje lleva el link completo.
-  assert.equal(shortLinks[0].confirmUrl, `https://gustavofarg-hash.github.io/futbol-colegiales/confirmar.html?m=2026-10-19_1500&p=p1&t=${token}`);
+  assert.equal(shortLinks[0].confirmUrl, `${PRODUCTION_ORIGIN}/confirmar.html?m=2026-10-19_1500&p=p1&t=${token}`);
   assert.equal(decodeURIComponent(shortLinks[0].waUrl).includes(token), true);
   assert.equal(decodeURIComponent(shortLinks[0].waUrl).includes('/c/?k='), false);
   const businessLinks = reminderLinks({ match, players, venue: 'Polideportivo Colegiales', choice: 'business', android: true });
@@ -1976,14 +1988,14 @@ test('anotarse solo: pendiente no ocupa cupo, la espera no resta y hay tope', as
   assert.equal(classifySelfSignup({ tentative: true, selfSignup: true }, null), '');
   const copy = pushCopy('alta', { name: 'Ana' }, { id: 'm1', date: '2026-10-19', time: '21:00', venueName: 'Colegiales' }, 'futbol-partidos');
   assert.match(copy.body, /Ana se anotó y espera confirmación\. 19\/10 · 21:00 · Colegiales/);
-  assert.equal(copy.url, 'https://gustavofarg-hash.github.io/futbol-colegiales/#/a-confirmar');
-  assert.equal(pushCopy('espera', { name: 'Ana' }, { id: 'm1', date: '2026-10-19', time: '21:00' }, 'futbol-partidos').url, 'https://gustavofarg-hash.github.io/futbol-colegiales/#/partido/m1');
-  assert.equal(pushCopy('baja', { name: 'Ana' }, { id: 'm1', date: '2026-10-19', time: '21:00' }).url, 'https://gustavofarg-hash.github.io/futbol-colegiales/#/partido/m1');
-  assert.equal(pushCopy('alta', { name: 'Ana' }, { id: 'm1', date: '2026-10-19', time: '21:00' }, 'mis-partidos-prueba').url, 'https://gustavofarg-hash.github.io/futbol-colegiales/prueba/#/a-confirmar');
+  assert.equal(copy.url, 'https://gustavofarg-hash.github.io/partidos/#/a-confirmar');
+  assert.equal(pushCopy('espera', { name: 'Ana' }, { id: 'm1', date: '2026-10-19', time: '21:00' }, 'futbol-partidos').url, 'https://gustavofarg-hash.github.io/partidos/#/partido/m1');
+  assert.equal(pushCopy('baja', { name: 'Ana' }, { id: 'm1', date: '2026-10-19', time: '21:00' }).url, 'https://gustavofarg-hash.github.io/partidos/#/partido/m1');
+  assert.equal(pushCopy('alta', { name: 'Ana' }, { id: 'm1', date: '2026-10-19', time: '21:00' }, 'mis-partidos-prueba').url, 'https://gustavofarg-hash.github.io/partidos/prueba/#/a-confirmar');
   const confirmedCopy = pushCopy('confirmado', { name: 'Ana', rosterId: 'fichaAna' }, { id: 'm1', date: '2026-10-19', time: '21:00', venueName: 'Polideportivo Colegiales' }, 'futbol-partidos');
   assert.equal(confirmedCopy.body, '¡Te confirmaron para el Lunes 19/10 21:00 en Polideportivo Colegiales!');
-  assert.equal(confirmedCopy.url, 'https://gustavofarg-hash.github.io/futbol-colegiales/#/jugador/fichaAna');
-  assert.equal(pushCopy('confirmado', { name: 'Ana', rosterId: 'fichaAna' }, { id: 'm1', date: '2026-10-19', time: '21:00' }, 'mis-partidos-prueba').url, 'https://gustavofarg-hash.github.io/futbol-colegiales/prueba/#/jugador/fichaAna');
+  assert.equal(confirmedCopy.url, 'https://gustavofarg-hash.github.io/partidos/#/jugador/fichaAna');
+  assert.equal(pushCopy('confirmado', { name: 'Ana', rosterId: 'fichaAna' }, { id: 'm1', date: '2026-10-19', time: '21:00' }, 'mis-partidos-prueba').url, 'https://gustavofarg-hash.github.io/partidos/prueba/#/jugador/fichaAna');
   const { noticeActions, actionDecision, pushFields } = require('../functions/logic.js');
   const alta = pushFields('alta', copy, { actionToken: 'a'.repeat(64), playerId: 'p1', tag: 't', project: 'futbol-partidos' });
   assert.equal(alta.decideUrl, 'https://southamerica-east1-futbol-partidos.cloudfunctions.net/decideSignup');
@@ -3353,7 +3365,7 @@ test('compartir la app nombra el link de instalación', () => {
   assert.match(text, /Anotate con Mis Partidos/);
   assert.match(text, /Instalá la app desde acá/);
   assert.ok(text.includes(APP_INSTALL_URL));
-  assert.equal(APP_INSTALL_URL, 'https://gustavofarg-hash.github.io/futbol-colegiales/');
+  assert.equal(APP_INSTALL_URL, 'https://gustavofarg-hash.github.io/partidos/');
 });
 
 test('el enlace del jugador abre esa ficha', () => {
@@ -3821,10 +3833,22 @@ test('estadísticas: cobrado contra lo que correspondía, por mes y por año', (
 });
 
 test('el registro copia quién podía editar y separa los pagos', () => {
-  assert.deepEqual(editorsOf({ viewers: ['*'], adders: ['*'] }), ['*']);
-  assert.deepEqual(editorsOf({ viewers: ['*'], adders: ['b'] }), ['*']);
+  assert.deepEqual(editorsOf({ viewers: ['*'], adders: ['*'] }), []);
+  assert.deepEqual(editorsOf({ viewers: ['*'], adders: ['*'], createdByUid: 'g' }, 'z'), ['g', 'z']);
+  assert.deepEqual(editorsOf({ viewers: ['*'], adders: ['b'] }), ['b']);
   assert.deepEqual(editorsOf({ viewers: ['a', 'b'], adders: ['b'], createdByUid: 'a' }, 'z'), ['a', 'b', 'z']);
   assert.deepEqual(editorsOf({ viewers: ['v'], adders: ['adder'], createdByUid: 'c' }, 'z'), ['v', 'adder', 'c', 'z']);
+  const pub = { id: 'pub', viewers: ['*'], adders: ['*'], createdByUid: 'gus' };
+  const star = { matchId: 'pub', editors: ['*'], actorUid: 'martin', section: 'partidos' };
+  const starPay = { matchId: 'pub', editors: ['*'], actorUid: 'martin', section: 'pagos' };
+  const otherAlta = { matchId: 'pub', editors: ['*'], actorUid: 'gus', section: 'partidos' };
+  assert.equal(canSeeLog(otherAlta, 'martin', [pub]), false);
+  assert.equal(canSeeLog(otherAlta, 'gus', [pub]), true);
+  assert.equal(canSeeLog(star, 'martin', [pub]), true);
+  assert.equal(canSeeLog(starPay, 'martin', []), true);
+  assert.equal(canSeeLog(star, 'otro', [pub]), false);
+  const staffed = { id: 'pub', viewers: ['*'], adders: ['martin'], createdByUid: 'gus' };
+  assert.equal(canSeeLog(otherAlta, 'martin', [staffed]), true);
   assert.deepEqual(playerLogFields({ name: 'Invitado 1', invitedBy: 'h', invitedByName: 'Juan' }, []), {
     playerName: 'Invitado 1',
     hostName: 'Juan',
@@ -4007,7 +4031,7 @@ test('el error del backup nombra la colección y el documento', () => {
   const app = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
   const css = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
   const version = sw.match(/const VERSION = '([^']+)'/)[1];
-  assert.equal(version, 'f7c-v241');
+  assert.equal(version, 'f7c-v243');
   assert.equal(/\b(?:confirm|alert|prompt)\s*\(/.test(app), false);
   assert.match(app, /class="slot-actions">\$\{wa\}\$\{pay\}/);
   assert.match(css, /#slots \.slot-actions \{ display: flex; flex-direction: column/);
@@ -5607,6 +5631,7 @@ test('al abrir no se reescriben los contadores y el límite diario se avisa', as
   assert.equal(RECENT_LISTEN_DAYS, 120);
   assert.equal(recentCutoff('2026-11-10'), '2026-07-13');
   assert.throws(() => refuseRealTarget('https://gustavofarg-hash.github.io/futbol-colegiales/prueba/'), /no abren el sitio publicado/);
+  assert.throws(() => refuseRealTarget('https://gustavofarg-hash.github.io/partidos/prueba/'), /no abren el sitio publicado/);
   assert.throws(() => refuseRealTarget('http://127.0.0.1:8080/?project=mis-partidos-prueba'), /no abren el sitio publicado/);
   assert.doesNotThrow(() => refuseRealTarget('http://127.0.0.1:18431/'));
   const previousEmulator = process.env.FIRESTORE_EMULATOR_HOST;

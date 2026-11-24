@@ -25,8 +25,8 @@ function weekdayName(iso) {
 
 const PRODUCTION_PROJECT = 'futbol-partidos';
 const TRIAL_PROJECT = 'mis-partidos-prueba';
-const PRODUCTION_BASE = 'https://gustavofarg-hash.github.io/futbol-colegiales/';
-const TRIAL_BASE = 'https://gustavofarg-hash.github.io/futbol-colegiales/prueba/';
+const PRODUCTION_BASE = 'https://gustavofarg-hash.github.io/partidos/';
+const TRIAL_BASE = 'https://gustavofarg-hash.github.io/partidos/prueba/';
 
 function appBase(project) {
   return String(project || '') === TRIAL_PROJECT ? TRIAL_BASE : PRODUCTION_BASE;

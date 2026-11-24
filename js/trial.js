@@ -1,21 +1,41 @@
 // Versión de prueba en /prueba/. No toca la app de producción.
 // En Node (pruebas) no hay location: se usa el sitio publicado.
 
-export const PRODUCTION_ORIGIN = 'https://gustavofarg-hash.github.io/futbol-colegiales';
+export const PRODUCTION_ORIGIN = 'https://gustavofarg-hash.github.io/partidos';
 export const PRODUCTION_PROJECT_ID = 'futbol-partidos';
 export const TRIAL_STORAGE_PREFIX = 'prueba:';
+
+/** Carpetas o archivos de la app cuando corre en la raíz (local o emulador). */
+const ROOT_APP_SEGMENTS = new Set([
+  'c', 'js', 'icons', 'tests', 'docs', 'functions', 'css',
+]);
 
 export function isTrialPath(pathname) {
   return /\/prueba(\/|$)/.test(String(pathname || ''));
 }
 
-/** Origen público de los links. En /prueba/ apunta a /prueba/. */
-export function publicAppOriginFrom(pathname, pageOrigin) {
+function isRootAppSegment(seg) {
+  return !seg || /\./.test(seg) || ROOT_APP_SEGMENTS.has(seg);
+}
+
+/** Ruta base de la app: /partidos, /futbol-colegiales, /partidos/prueba, o '' en la raíz. */
+export function appBasePath(pathname) {
   const path = String(pathname || '');
-  if (!isTrialPath(path)) return PRODUCTION_ORIGIN;
-  const root = path.split(/\/prueba(\/|$)/)[0];
+  if (isTrialPath(path)) {
+    const root = path.split(/\/prueba(\/|$)/)[0];
+    return `${root}/prueba`;
+  }
+  const match = path.match(/^\/([^/]+)/);
+  if (!match || isRootAppSegment(match[1])) return '';
+  return `/${match[1]}`;
+}
+
+/** Origen público de los links. Sale de location; si no hay carpeta, el sitio publicado. */
+export function publicAppOriginFrom(pathname, pageOrigin) {
   const host = String(pageOrigin || 'https://gustavofarg-hash.github.io').replace(/\/$/, '');
-  return `${host}${root}/prueba`;
+  const base = appBasePath(pathname);
+  if (base) return `${host}${base}`;
+  return PRODUCTION_ORIGIN;
 }
 
 export function publicAppOrigin() {

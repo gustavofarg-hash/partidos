@@ -24,7 +24,7 @@ export function newShortCode() {
   return out.join('');
 }
 
-/** https://…/futbol-colegiales/c/?k=Ab3x9Zk2 */
+/** https://…/partidos/c/?k=Ab3x9Zk2 */
 export function shortConfirmUrl(code, origin = publicAppOrigin()) {
   const base = origin.endsWith('/') ? origin : `${origin}/`;
   const url = new URL('c/', base);

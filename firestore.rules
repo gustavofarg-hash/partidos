@@ -1833,7 +1833,8 @@ service cloud.firestore {
           && matchData(d.matchId).get('playerVisible', true) != false;
     }
     match /log/{entryId} {
-      allow read: if isActiveStaff() && canReadLog(resource.data);
+      allow get: if isActiveStaff() && canReadLog(resource.data);
+      allow list: if isActiveStaff() && resource.data.editors.hasAny([request.auth.uid, '*']);
       allow create: if isActiveStaff() && validLog(request.resource.data) && entryId.size() > 0 && entryId.size() <= 80;
       allow create: if guestSelfLog(request.resource.data) && entryId.size() > 0 && entryId.size() <= 80;
       allow update: if false;
