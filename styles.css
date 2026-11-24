@@ -349,6 +349,15 @@ button.who, a.who { text-align: left; background: none; border: 0; color: inheri
 #wait-list .slot > .wa-btn { width: 40px; height: 40px; }
 #wait-list .slot > .more-btn { width: 32px; }
 #wait-list .tag { border-radius: 10px; }
+/* v246: «No jugó pero pagó» como el partido y la espera: el pago («… · cobró Gustavo»), el nombre y las etiquetas enteros, sin «…». */
+#no-play-list .name { white-space: normal; overflow: visible; text-overflow: unset; min-width: auto; overflow-wrap: normal; word-break: normal; hyphens: none; }
+#no-play-list .phone-line { white-space: nowrap; flex: 0 0 auto; }
+#no-play-list .pay-line,
+#no-play-list .pay-pending,
+#no-play-list .promo-badge,
+#no-play-list .confirm-tag,
+#no-play-list .tag { white-space: normal; overflow: visible; text-overflow: unset; overflow-wrap: break-word; }
+#no-play-list .who { min-width: 0; }
 .level-badge {
   flex: none; font-size: 0.75rem; font-weight: 800; line-height: 1;
   padding: 3px 6px; border-radius: 999px;
