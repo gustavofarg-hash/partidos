@@ -54,7 +54,9 @@ test('suspendido: la página del jugador consulta la marca de a un documento, un
   store._guest = true;
   store._guestRosterId = 'ficha1';
   assert.equal(await store._checkGuestBlocks(['gus', 'mar', 'gus']), true);
-  assert.equal(await store._checkGuestBlocks(['gus', 'mar']), false);
+  // v247: la segunda vez no vuelve a leer y sigue diciendo que hay uno suspendido.
+  assert.equal(await store._checkGuestBlocks(['gus', 'mar']), true);
+  assert.equal(await store._checkGuestBlocks(['mar']), false);
   assert.deepEqual(asked.sort(), ['suspendFlags/ficha1_gus', 'suspendFlags/ficha1_mar']);
   assert.deepEqual(store.guestBlockedUids(), ['gus']);
 });

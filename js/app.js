@@ -53,7 +53,7 @@ import {
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v246';
+const APP_VERSION = 'f7c-v247';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -1225,6 +1225,9 @@ function render() {
       if (!app.loaded) return;
       const id = route().id;
       const person = (app.roster || []).find((row) => row.id === id);
+      // v247: hasta saber si el organizador del link (o el de algún partido) lo suspendió,
+      // solo «Cargando…»: la lista no aparece ni un instante.
+      if (app.guestReady === false) { showGuestLoading(); return; }
       if (app.store?.linkInvalid === true) showLinkInvalid();
       else if (person) renderPlayerSignup(person);
       else showAnonymousDenial();
@@ -5181,6 +5184,8 @@ function renderPlayerSignup(person) {
     showAnonymousDenial();
     return;
   }
+  if (app.guestReady === false) { showGuestLoading(); return; }
+  if (app.guestAccessError) { showGuestAccessError(); return; }
   document.documentElement.classList.add('anon-lock');
   app.store?.watchConfirmSeen?.(person.id);
   const list = selfSignupSection(person);
@@ -5193,6 +5198,7 @@ function renderPlayerSignup(person) {
       </header>
       ${title ? `<h2 id="player-signup-of">${esc(title)}</h2>` : ''}
       ${app.guestMatchError ? `<p class="self-error" role="alert">${esc(app.guestMatchError)}</p>` : ''}
+      ${!app.guestMatchError && app.guestHiddenError ? '<p class="self-error" role="alert" id="self-hidden-error">No se pudieron cargar algunos partidos. Probá de nuevo en un rato.</p>' : ''}
       ${confirmNoticesHtml(person)}
       ${playerPushHtml()}
       ${list || '<p class="empty-wait" id="self-empty">No hay partidos próximos.</p>'}
@@ -8991,6 +8997,18 @@ function syncTextSize() {
   requestAnimationFrame(placeBars);
 }
 
+function showGuestLoading() {
+  document.documentElement.classList.add('anon-lock');
+  if ($('#player-loading')) return;
+  replaceView('<div class="loading" id="player-loading">Cargando…</div>');
+}
+/** v247: no se pudo saber si el organizador del link lo suspendió: ni lista ni «NO TENÉS ACCESO». */
+function showGuestAccessError() {
+  document.documentElement.classList.add('anon-lock');
+  replaceView(`<div class="anon-lock" id="player-check-error"><p><b>No pudimos cargar tus partidos.</b></p><p class="hint">Revisá la conexión y probá de nuevo.</p><p><button type="button" class="btn primary" id="player-check-retry">Reintentar</button></p></div>`);
+  const btn = $('#player-check-retry');
+  if (btn) btn.onclick = () => { location.reload(); };
+}
 function showAnonymousDenial() {
   document.documentElement.classList.add('anon-lock');
   try { if (sheet?.open) sheet.close(); } catch { /* sigue cerrado */ }
@@ -9175,6 +9193,10 @@ async function boot() {
     app.playersReady = view.playersReady === true;
     if (app.guestPlayer) app.shareOrganizer = view.shareOrganizer || null;
     app.guestMatchError = view.guestMatchError || '';
+    // v247: la página del jugador espera a saber si lo suspendieron antes de mostrar partidos.
+    app.guestReady = view.guestReady !== false;
+    app.guestAccessError = view.guestAccessError === true;
+    app.guestHiddenError = view.guestHiddenError === true;
     if (Array.isArray(view.confirmSeen)) app.confirmSeen = view.confirmSeen;
     app.compensations = mergeHeldCompensations(view.compensations || []);
     app.usage = view.usage || null;
@@ -9194,7 +9216,7 @@ async function boot() {
     if (!app.guestPlayer && pricesError && pricesError !== app.pricesError) showError(adminOnlyDetail(pricesError, isAdminUser()));
     app.pricesError = pricesError || null;
     app.loaded = true;
-    const stamp = JSON.stringify([app.matches, app.players, app.history, app.historyMeta, app.historyError, app.historyHasMore, app.historyLoading, app.rosterWatch, app.rosterCovered, app.rosterDates, app.roster, app.suspensions, app.suspensionHistory, app.payBatches, app.behavior, app.organizers, app.venues, app.prices, app.credits, app.compensations, app.log, app.logError, app.rosterError, app.organizersError, app.venuesError, app.pricesError, app.creditsError, app.confirmSeen, app.guestMatchError, app.statsMatches, app.statsPlayers, app.statsLoading, app.statsError, app.guestBlocked]);
+    const stamp = JSON.stringify([app.matches, app.players, app.history, app.historyMeta, app.historyError, app.historyHasMore, app.historyLoading, app.rosterWatch, app.rosterCovered, app.rosterDates, app.roster, app.suspensions, app.suspensionHistory, app.payBatches, app.behavior, app.organizers, app.venues, app.prices, app.credits, app.compensations, app.log, app.logError, app.rosterError, app.organizersError, app.venuesError, app.pricesError, app.creditsError, app.confirmSeen, app.guestMatchError, app.statsMatches, app.statsPlayers, app.statsLoading, app.statsError, app.guestBlocked, app.guestReady, app.guestAccessError, app.guestHiddenError]);
     const changed = stamp !== app.viewStamp;
     app.viewStamp = stamp;
     scheduleRetroactiveAutoCredit();

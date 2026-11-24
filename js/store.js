@@ -2795,10 +2795,16 @@ export class FirebaseStore {
     const today = this._queryDay;
     const { doc, onSnapshot } = this.fs;
     const seen = { roster: false, matches: false, players: false, share: !this._shareToken };
-    if (this._guestBlocksFor !== id) { this._guestBlocks = new Map(); this._guestBlocksFor = id; }
+    if (this._guestBlocksFor !== id) { this._guestBlocks = new Map(); this._guestBlockWaits = new Map(); this._guestBlocksFor = id; }
+    // v247: hasta saber si algún organizador lo suspendió, la página no muestra partidos.
+    this.state.guestReady = false;
+    this.state.guestAccessError = false;
+    this.state.guestHiddenError = false;
+    let matchesPending = false;
     const rows = (snap) => snap.docs.map((item) => ({ id: item.id, ...item.data() }));
     const publish = () => {
-      if (!seen.roster || !seen.matches || !seen.players || !seen.share) return;
+      if (!seen.roster || !seen.matches || !seen.players || !seen.share || matchesPending) return;
+      this.state.guestReady = true;
       this.serverOk = true;
       this.state.playersReady = true;
       this._emit();
@@ -2814,10 +2820,23 @@ export class FirebaseStore {
       const byId = new Map();
       for (const row of this._guestBuckets.open) byId.set(row.id, row);
       for (const row of this._guestBuckets.link) byId.set(row.id, row);
-      this.state.matches = [...byId.values()].filter((match) => match.playerVisible !== false && match.cancelled !== true);
-      // v245: ¿alguno de estos organizadores lo suspendió? Un get por organizador, una vez.
-      const uids = this.state.matches.flatMap((match) => matchOrganizerUids(match));
-      void this._checkGuestBlocks(uids).then((changed) => { if (changed) this._emit(); });
+      const all = [...byId.values()].filter((match) => match.playerVisible !== false && match.cancelled !== true);
+      // v247: un partido se muestra solo si ya se sabe que ninguno de sus organizadores
+      // lo suspendió. Mientras se pregunta, no está; si la consulta falla, tampoco.
+      const uids = [...new Set(all.flatMap((match) => matchOrganizerUids(match)))];
+      const stateOf = (uid) => this._guestBlockOf(uid);
+      this.state.matches = all.filter((match) => matchOrganizerUids(match).every((uid) => stateOf(uid) === 'clear'));
+      this.state.guestHiddenError = all.some((match) => matchOrganizerUids(match).some((uid) => stateOf(uid) === 'error'));
+      const unknown = uids.filter((uid) => !stateOf(uid) || stateOf(uid) === 'pending');
+      matchesPending = unknown.length > 0;
+      if (matchesPending) {
+        void this._checkGuestBlocks(unknown).then(() => {
+          if (this._guestRosterId !== id) return;
+          showMatches();
+          publish();
+          if (this.state.guestReady) this._emit();
+        });
+      }
     };
     const showPlayers = () => {
       const byId = new Map();
@@ -2893,7 +2912,13 @@ export class FirebaseStore {
         armMatches(this.state.shareOrganizer?.uid || '');
         // v245: antes de mostrar la lista, saber si el dueño del link lo suspendió.
         const owner = this.state.shareOrganizer?.uid || '';
-        const done = () => { seen.share = true; publish(); };
+        const done = () => {
+          // v247: si no se pudo saber, ni la lista ni «NO TENÉS ACCESO»: un aviso para reintentar.
+          this.state.guestAccessError = !!owner && this._guestBlockOf(owner) === 'error';
+          seen.share = true;
+          publish();
+          if (this.state.guestReady) this._emit();
+        };
         if (owner) void this._checkGuestBlocks([owner]).then(done, done);
         else done();
       }, (error) => {
@@ -5433,28 +5458,61 @@ export class FirebaseStore {
   /** v245: organizadores que suspendieron a la ficha del link (los que ya se consultaron). */
   guestBlockedUids() {
     if (!this._guest || this.actor?.uid) return [];
-    return [...(this._guestBlocks || new Map()).entries()].filter(([, on]) => on === true).map(([uid]) => uid);
+    return [...(this._guestBlocks || new Map()).entries()].filter(([, on]) => on === 'blocked').map(([uid]) => uid);
   }
-  /** v245: pregunta una vez por organizador si hay marca. Devuelve true si cambió algo. */
+  /** v247: estado de la marca de un organizador: pending | clear | blocked | error (o '' si no se pidió). */
+  _guestBlockOf(uid) {
+    return (this._guestBlocks || new Map()).get(String(uid || '').trim()) || '';
+  }
+  /**
+   * v245/v247: pregunta una vez por organizador si hay marca de suspensión.
+   * Si ya hay una consulta en curso para ese organizador, la espera.
+   * Un error se reintenta una vez; si sigue fallando queda «error», no «sin marca».
+   * Devuelve true si algún organizador quedó suspendido o con error.
+   */
   async _checkGuestBlocks(uids) {
     const id = String(this._guestRosterId || '').trim();
-    if (!id || !this.fs?.getDoc) return false;
     this._guestBlocks ||= new Map();
+    this._guestBlockWaits ||= new Map();
+    if (!id || !this.fs?.getDoc) {
+      // Sin forma de preguntar: «error» (no se muestra), así nadie vuelve a pedirlo en bucle.
+      for (const uid of uids || []) if (String(uid || '').trim()) this._guestBlocks.set(String(uid).trim(), 'error');
+      return true;
+    }
     const { doc, getDoc } = this.fs;
-    const todo = [...new Set((uids || []).map((uid) => String(uid || '').trim()).filter(Boolean))].filter((uid) => !this._guestBlocks.has(uid));
-    if (!todo.length) return false;
-    for (const uid of todo) this._guestBlocks.set(uid, false);
-    let changed = false;
-    await Promise.all(todo.map(async (uid) => {
-      try {
-        const snap = await getDoc(doc(this.db, 'suspendFlags', suspendFlagId(id, uid)));
-        if (snap.exists()) { this._guestBlocks.set(uid, true); changed = true; }
-      } catch (error) {
-        // Sin la regla publicada todavía: se sigue mostrando como antes.
-        console.error(error?.code || 'sin-codigo', error);
+    const wanted = [...new Set((uids || []).map((uid) => String(uid || '').trim()).filter(Boolean))];
+    const ask = async (uid) => {
+      const delay = (globalThis.__F7C_TEST && Number(globalThis.__F7C_FLAG_DELAY_MS)) || 0;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+          if (globalThis.__F7C_TEST && globalThis.__F7C_FLAG_FAIL) throw Object.assign(new Error('prueba'), { code: 'unavailable' });
+          const snap = await getDoc(doc(this.db, 'suspendFlags', suspendFlagId(id, uid)));
+          if (snap.exists()) return 'blocked';
+          // Sin conexión, «no hay marca» puede ser viejo: no alcanza para mostrar la lista.
+          return snap.metadata?.fromCache === true ? 'error' : 'clear';
+        } catch (error) {
+          console.error(error?.code || 'sin-codigo', error);
+          if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 600));
+        }
       }
-    }));
-    return changed;
+      return 'error';
+    };
+    const waits = wanted.map((uid) => {
+      const known = this._guestBlocks.get(uid);
+      if (known && known !== 'pending') return Promise.resolve(known);
+      if (this._guestBlockWaits.has(uid)) return this._guestBlockWaits.get(uid);
+      this._guestBlocks.set(uid, 'pending');
+      const job = ask(uid).then((state) => {
+        if (this._guestRosterId === id) this._guestBlocks.set(uid, state);
+        this._guestBlockWaits.delete(uid);
+        return state;
+      });
+      this._guestBlockWaits.set(uid, job);
+      return job;
+    });
+    const states = await Promise.all(waits);
+    return states.some((state) => state === 'blocked' || state === 'error');
   }
   async addBehavior(id, input) {
     return withBehaviorFlight(this, behaviorFlightKey(id, input), () => this._addBehavior(id, input));
