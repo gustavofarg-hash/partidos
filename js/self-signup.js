@@ -1,7 +1,8 @@
 // Anotarse solo desde la ficha. Puro: no escribe en Firestore.
 // Un pendiente no ocupa cupo ni suma plata hasta que el organizador confirma.
 // La espera entra directo. Sacarse de un pendiente o de la espera no resta puntos.
-import { toEpoch } from './dates.js';
+// v248: un confirmado que anula solo el día del partido resta 0,5 (selfDropPenalty).
+import { toEpoch, todayISO } from './dates.js';
 import { personKey, rosterHolderIds } from './roster.js';
 import { organizerFirstName, pendingConfirmLabel } from './share.js';
 
@@ -190,4 +191,67 @@ export function canSelfCancel(player, match, now = Date.now()) {
   if (isSelfPending(player) || player.waiting === true) return true;
   if (!occupiesSpot(player)) return false;
   return toEpoch(match?.date, match?.time) - now > DROP_LOCK_MS;
+}
+
+// v248: anular solo el día del partido resta 0,5 de Comportamiento.
+export const SELF_DROP_POINTS = -0.5;
+export const SELF_DROP_REASON = 'Se bajó el día del partido (Autoservicio)';
+/** Si se anotó hace 5 minutos o menos, se toma como que se anotó por error: no resta. */
+export const SELF_DROP_GRACE_MS = 5 * 60 * 1000;
+
+/**
+ * v248: ¿esta baja del Autoservicio resta 0,5? Solo si se cumple todo:
+ * - estaba confirmado: ocupaba lugar y no era un pendiente de confirmación,
+ *   un «a confirmar» ni la lista de espera;
+ * - anula desde las 0:00 del día del partido (hora de Buenos Aires);
+ * - pasaron más de 5 minutos desde que se anotó (createdAt de la fila).
+ * Sin hora de alta guardada, sin ficha o sin organizador, no resta: no se adivina.
+ * El jugador no ve ningún aviso: esto solo decide si se escribe la entrada.
+ */
+export function selfDropPenalty({ player, match, now = Date.now() } = {}) {
+  const no = (why) => ({ penalize: false, why });
+  if (!player) return no('sin-jugador');
+  if (isSelfPending(player)) return no('pendiente');
+  if (player.waiting === true) return no('espera');
+  if (!occupiesSpot(player) || player.tentative === true || player.selfPending === true) return no('sin-confirmar');
+  const rosterId = String(player.rosterId || '').trim();
+  if (!rosterId) return no('sin-ficha');
+  const date = String(match?.date || player.matchDate || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return no('sin-fecha');
+  const at = Number(now);
+  if (!Number.isFinite(at) || todayISO(new Date(at)) !== date) return no('otro-dia');
+  const signedAt = Number(player.createdAt);
+  if (!Number.isInteger(signedAt) || signedAt <= 0) return no('sin-hora-de-alta');
+  if (!(at - signedAt > SELF_DROP_GRACE_MS)) return no('recien-anotado');
+  const viaLink = String(player.signedUpWith || '').trim();
+  const organizerUid = viaLink || String(player.addedByUid || '').trim();
+  if (!organizerUid) return no('sin-organizador');
+  const rawName = viaLink ? (player.signedUpWithName || player.addedBy) : player.addedBy;
+  const organizerName = String(rawName || '').trim().replace(/\s+/g, ' ').slice(0, 40) || 'Organizador';
+  return { penalize: true, why: 'mismo-dia', organizerUid, organizerName };
+}
+
+/**
+ * v248: id y datos de la entrada de Comportamiento de esa baja. El id sale de la
+ * fila y de su hora de alta: una baja escribe a lo sumo una entrada, y anotarse
+ * de nuevo y volver a bajarse es otra baja. Va en el mismo lote que el borrado.
+ */
+export function selfDropEntry({ playerId, player, match, decision, now = Date.now() } = {}) {
+  const id = String(playerId || '').trim();
+  if (!decision?.penalize || !id || id.includes('/')) return null;
+  return {
+    docId: `auto_${id}_${Number(player.createdAt)}`,
+    entry: {
+      type: 'baja',
+      points: SELF_DROP_POINTS,
+      reason: SELF_DROP_REASON,
+      comment: '',
+      matchId: String(match?.id || player.matchId || ''),
+      createdByUid: decision.organizerUid,
+      createdByName: decision.organizerName,
+      createdAt: Math.trunc(Number(now)),
+      rosterId: String(player.rosterId || '').trim(),
+      playerId: id,
+    },
+  };
 }

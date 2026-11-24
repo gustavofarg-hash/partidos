@@ -96,7 +96,7 @@ import { creditDocId, nextCredit } from './credit.js';
 import { MAX_PRICE } from './prices.js';
 import { PRICES_DENIED_READ, priceRecord } from './prices.js';
 import { nextWaitOrder } from './waiting.js';
-import { canSelfCancel, isSelfPending, occupiesSpot, signupLimitFrom, signupLimitRecord, signupRateDecision } from './self-signup.js';
+import { canSelfCancel, isSelfPending, occupiesSpot, selfDropEntry, selfDropPenalty, signupLimitFrom, signupLimitRecord, signupRateDecision } from './self-signup.js';
 import { tokenDocId } from './push.js';
 import { newShareToken } from './share.js';
 import { canResetLink, isLinkKey, linkKeyTargets, newLinkKey, rosterMirror, sameMirror } from './link-reset.js';
@@ -1188,6 +1188,12 @@ class LocalStore {
       guest: true,
       shareToken: '',
     })]);
+    // v248: igual que en Firebase: sin sesión, el confirmado que anula el día del partido resta 0,5.
+    const drop = this.actor?.uid ? null : selfDropEntry({ playerId, player, match: { id: player.matchId, ...match }, decision: selfDropPenalty({ player, match, now }), now });
+    if (drop) {
+      db.behavior ||= {};
+      if (!db.behavior[drop.docId]) db.behavior[drop.docId] = drop.entry;
+    }
     this._save(db);
     await this.deletePlayer(playerId, { skipLog: true });
   }
@@ -4533,14 +4539,25 @@ export class FirebaseStore {
     await this._chargeSignupRate(player.rosterId || playerId, playerId);
     const { doc, deleteDoc, writeBatch } = this.fs;
     const proved = !!this._guestLinkKey();
-    await this._deleteWithGuard(async (gid) => {
-      if (!gid && !proved) return deleteDoc(doc(this.db, 'players', playerId));
+    // v248: confirmado que anula el día del partido: −0,5 en el mismo lote que la baja.
+    // El jugador no ve ningún aviso. Si las reglas niegan la entrada (reglas viejas,
+    // reloj del teléfono corrido), la baja sale igual sin la entrada.
+    const drop = selfDropEntry({ playerId, player, match, decision: selfDropPenalty({ player, match, now }), now });
+    const remove = (withDrop) => this._deleteWithGuard(async (gid) => {
+      if (!gid && !proved && !withDrop) return deleteDoc(doc(this.db, 'players', playerId));
       const batch = writeBatch(this.db);
       batch.delete(doc(this.db, 'players', playerId));
       if (gid) batch.delete(doc(this.db, GUARD_COLLECTION, gid));
+      if (withDrop) batch.set(doc(this.db, 'behavior', drop.docId), drop.entry);
       this._addLinkProof(batch, player.rosterId);
       return batch.commit();
     }, player);
+    try {
+      await remove(!!drop);
+    } catch (error) {
+      if (!drop || !permissionDenied(error)) throw error;
+      await remove(false);
+    }
     this.state.players = this.state.players.filter((row) => row.id !== playerId);
     this._emit();
     try {

@@ -1621,6 +1621,45 @@ service cloud.firestore {
           && d.createdByName is string && d.createdByName.size() > 0 && d.createdByName.size() <= 40
           && d.createdAt is int && d.createdAt > 0;
     }
+    // v248: el jugador (sin sesión) que anula solo el día del partido estando confirmado
+    // escribe −0,5 a su ficha, en el MISMO lote que borra su fila. La fila se lee como
+    // estaba antes del lote (get) y tiene que quedar borrada (existsAfter): así solo
+    // vale para la baja de esa fila, una vez. Todo fijo: tipo, puntos, motivo, partido.
+    function selfDropDayOk(date) {
+      let start = timestamp.date(int(date[0:4]), int(date[5:7]), int(date[8:10])) + duration.value(3, 'h');
+      return request.time >= start && request.time < start + duration.value(1, 'd');
+    }
+    function selfDropRowOk(entryId, d, p) {
+      let org = p.get('signedUpWith', '') is string && p.get('signedUpWith', '') != '' ? p.signedUpWith : p.get('addedByUid', '');
+      return p.get('rosterId', '') == d.rosterId
+          && p.matchId == d.matchId
+          && p.get('waiting', false) != true
+          && p.get('noPlay', false) != true
+          && p.get('tentative', false) != true
+          && p.get('selfPending', false) != true
+          && p.createdAt is int && p.createdAt > 0
+          && request.time.toMillis() > p.createdAt + 300000
+          && entryId == 'auto_' + d.playerId + '_' + string(p.createdAt)
+          && org is string && org.size() > 0 && d.createdByUid == org;
+    }
+    function selfDropOk(entryId, d) {
+      return d.keys().hasOnly(['rosterId', 'type', 'points', 'reason', 'comment', 'matchId', 'createdByUid', 'createdByName', 'createdAt', 'playerId'])
+          && d.type == 'baja'
+          && d.points == -0.5
+          && d.reason == 'Se bajó el día del partido (Autoservicio)'
+          && d.comment == ''
+          && d.playerId is string && d.playerId.size() > 0 && d.playerId.size() <= 200
+          && d.matchId is string && d.matchId.size() > 0 && d.matchId.size() <= 80
+          && d.createdByUid is string && d.createdByUid.size() <= 128
+          && d.createdByName is string && d.createdByName.size() > 0 && d.createdByName.size() <= 40
+          && d.createdAt is int
+          && d.createdAt > request.time.toMillis() - 600000
+          && d.createdAt < request.time.toMillis() + 600000
+          && guestRoster(d.rosterId)
+          && !existsAfter(playerPath(d.playerId))
+          && selfDropRowOk(entryId, d, get(playerPath(d.playerId)).data)
+          && selfDropDayOk(matchData(d.matchId).date);
+    }
     match /behavior/{entryId} {
       allow read, write: if isAdmin();
       allow get, list: if isActiveStaff();
@@ -1628,6 +1667,7 @@ service cloud.firestore {
           && entryId == request.resource.data.rosterId + '_' + request.auth.uid + '_' + string(request.resource.data.createdAt)
           && exists(rosterPath(request.resource.data.rosterId))
           && get(rosterPath(request.resource.data.rosterId)).data.get('holders', []).hasAny([request.auth.uid]);
+      allow create: if !signedIn() && selfDropOk(entryId, request.resource.data);
       allow update: if false;
       allow delete: if isAdmin() || resource.data.createdByUid == request.auth.uid;
     }
