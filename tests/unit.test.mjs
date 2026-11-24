@@ -26,7 +26,7 @@ import { addedByOrganizer, amountOwed, matchDebtCounts, mineSummary, monthLabel,
 import { chunkList, dayMoneyReady, rosterDatesOf } from '../js/roster-load.js';
 import { compensationDoneDates, countedForMoney, countedGoals, daySignupSummary, diaDatesForOrganizer, matchOrganizedBy, matchTake, organizerDayShare, organizerShareByPeriod, organizerViewTake, periodBuckets, playerOrganizerMonths, signupOrganizerUid } from '../js/stats.js';
 import { usualPlayers } from '../js/regulars.js';
-import { canSeeLog, editorsOf, inLogRange, logText, matchEditDetail, pagoEntry, pagoMatchText, paymentLines, playerLogFields, weekRange } from '../js/log.js';
+import { canSeeLog, editorsOf, inLogRange, logText, matchEditDetail, pagoEntry, pagoMatchText, paymentLines, playerLogFields, setDefaultLogStaff, weekRange } from '../js/log.js';
 import { activityNoticeText, activityNotices } from '../js/notify.js';
 import { planRows } from '../js/settle.js';
 import { dayCompensation, reconcileTransfers } from '../js/compensate.js';
@@ -3833,20 +3833,32 @@ test('estadísticas: cobrado contra lo que correspondía, por mes y por año', (
 });
 
 test('el registro copia quién podía editar y separa los pagos', () => {
+  setDefaultLogStaff([]);
   assert.deepEqual(editorsOf({ viewers: ['*'], adders: ['*'] }), []);
   assert.deepEqual(editorsOf({ viewers: ['*'], adders: ['*'], createdByUid: 'g' }, 'z'), ['g', 'z']);
   assert.deepEqual(editorsOf({ viewers: ['*'], adders: ['b'] }), ['b']);
   assert.deepEqual(editorsOf({ viewers: ['a', 'b'], adders: ['b'], createdByUid: 'a' }, 'z'), ['a', 'b', 'z']);
   assert.deepEqual(editorsOf({ viewers: ['v'], adders: ['adder'], createdByUid: 'c' }, 'z'), ['v', 'adder', 'c', 'z']);
+  const staff = ['g', 'm'];
+  assert.deepEqual(editorsOf({ viewers: ['*'], adders: ['*'] }, '', staff), ['g', 'm']);
+  assert.deepEqual(editorsOf({ viewers: ['*'], adders: ['*'], createdByUid: 'g' }, 'z', staff), ['g', 'z', 'm']);
+  assert.deepEqual(editorsOf({ viewers: ['*'], adders: ['b'] }, '', staff), ['b', 'g', 'm']);
+  assert.deepEqual(editorsOf({ viewers: ['a', 'b'], adders: ['b'], createdByUid: 'a' }, 'z', staff), ['a', 'b', 'z']);
+  assert.deepEqual(editorsOf({ viewers: ['*'] }, 'z', [
+    { uid: 'g', role: 'admin' },
+    { uid: 'h', role: 'organizer', active: false },
+    { uid: 'm', role: 'organizer' },
+  ]), ['z', 'g', 'm']);
   const pub = { id: 'pub', viewers: ['*'], adders: ['*'], createdByUid: 'gus' };
   const star = { matchId: 'pub', editors: ['*'], actorUid: 'martin', section: 'partidos' };
   const starPay = { matchId: 'pub', editors: ['*'], actorUid: 'martin', section: 'pagos' };
   const otherAlta = { matchId: 'pub', editors: ['*'], actorUid: 'gus', section: 'partidos' };
-  assert.equal(canSeeLog(otherAlta, 'martin', [pub]), false);
+  assert.equal(canSeeLog(otherAlta, 'martin', [pub]), true);
   assert.equal(canSeeLog(otherAlta, 'gus', [pub]), true);
+  assert.equal(canSeeLog(otherAlta, 'martin', []), false);
   assert.equal(canSeeLog(star, 'martin', [pub]), true);
   assert.equal(canSeeLog(starPay, 'martin', []), true);
-  assert.equal(canSeeLog(star, 'otro', [pub]), false);
+  assert.equal(canSeeLog(star, 'otro', []), false);
   const staffed = { id: 'pub', viewers: ['*'], adders: ['martin'], createdByUid: 'gus' };
   assert.equal(canSeeLog(otherAlta, 'martin', [staffed]), true);
   assert.deepEqual(playerLogFields({ name: 'Invitado 1', invitedBy: 'h', invitedByName: 'Juan' }, []), {
@@ -4031,7 +4043,7 @@ test('el error del backup nombra la colección y el documento', () => {
   const app = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
   const css = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
   const version = sw.match(/const VERSION = '([^']+)'/)[1];
-  assert.equal(version, 'f7c-v243');
+  assert.equal(version, 'f7c-v244');
   assert.equal(/\b(?:confirm|alert|prompt)\s*\(/.test(app), false);
   assert.match(app, /class="slot-actions">\$\{wa\}\$\{pay\}/);
   assert.match(css, /#slots \.slot-actions \{ display: flex; flex-direction: column/);
