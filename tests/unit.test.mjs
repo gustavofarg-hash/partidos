@@ -3369,8 +3369,8 @@ test('compartir la app nombra el link de instalación', () => {
 });
 
 test('el enlace del jugador abre esa ficha', () => {
-  assert.equal(playerLink('abc/1'), `${APP_INSTALL_URL}#/jugador/abc%2F1`);
-  assert.equal(playerLink('abc', 'tok_en-1234567890abcd'), `${APP_INSTALL_URL}#/jugador/abc/tok_en-1234567890abcd`);
+  assert.equal(playerLink('abc/1'), `${APP_INSTALL_URL}autoservicio/#/jugador/abc%2F1`);
+  assert.equal(playerLink('abc', 'tok_en-1234567890abcd'), `${APP_INSTALL_URL}autoservicio/#/jugador/abc/tok_en-1234567890abcd`);
   assert.notEqual(playerLink('abc', 'aaaa'), playerLink('abc', 'bbbb'));
   assert.equal(playerLink('  '), '');
   assert.equal(isPlayerDeepLink('#/jugador/abc'), true);
@@ -4043,7 +4043,7 @@ test('el error del backup nombra la colección y el documento', () => {
   const app = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
   const css = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
   const version = sw.match(/const VERSION = '([^']+)'/)[1];
-  assert.equal(version, 'f7c-v247');
+  assert.equal(version, 'f7c-v248');
   assert.equal(/\b(?:confirm|alert|prompt)\s*\(/.test(app), false);
   assert.match(app, /class="slot-actions">\$\{wa\}\$\{pay\}/);
   assert.match(css, /#slots \.slot-actions \{ display: flex; flex-direction: column/);

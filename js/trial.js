@@ -7,7 +7,7 @@ export const TRIAL_STORAGE_PREFIX = 'prueba:';
 
 /** Carpetas o archivos de la app cuando corre en la raíz (local o emulador). */
 const ROOT_APP_SEGMENTS = new Set([
-  'c', 'js', 'icons', 'tests', 'docs', 'functions', 'css',
+  'c', 'autoservicio', 'js', 'icons', 'tests', 'docs', 'functions', 'css',
 ]);
 
 export function isTrialPath(pathname) {
