@@ -5,10 +5,10 @@ import { sameOrganizer } from './organizers.js';
 import { givenName, nickOf, personKey, rosterHolderIds, visibleRosterPhone } from './roster.js';
 import { playerAccess } from './access.js';
 import { waSendUrl } from './phone.js';
-import { publicAppOrigin } from './trial.js';
+import { PRODUCTION_ORIGIN, publicAppOrigin } from './trial.js';
 import { courtLabel, footballPhrase } from './venues.js';
 
-export const CONFIRM_ORIGIN = 'https://gustavofarg-hash.github.io/futbol-colegiales';
+export const CONFIRM_ORIGIN = PRODUCTION_ORIGIN;
 
 /** Token opaco (base64url, 18 bytes). No se puede adivinar. */
 export function newConfirmToken() {
