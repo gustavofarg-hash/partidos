@@ -2,11 +2,11 @@
 
 La app de todos los días sigue en
 
-https://gustavofarg-hash.github.io/futbol-colegiales/
+https://gustavofarg-hash.github.io/partidos/
 
 La de prueba, cuando se publique, queda en
 
-https://gustavofarg-hash.github.io/futbol-colegiales/prueba/
+https://gustavofarg-hash.github.io/partidos/prueba/
 
 Ahí se prueba un cambio. Si Gustavo da el OK, ese cambio se mergea a `main` y recién entonces llega a producción. La de prueba usa otra base. No puede escribir en el Firestore `futbol-partidos`.
 
@@ -27,7 +27,7 @@ Si todavía no existe la rama `prueba`, se publica solo la raíz.
 
 Hacerlo en este orden, después de mergear este cambio a `main`:
 
-1. GitHub → repositorio `futbol-colegiales` → **Settings** → **Secrets and variables** → **Actions** → pestaña **Variables** → **New repository variable**.
+1. GitHub → repositorio `partidos` → **Settings** → **Secrets and variables** → **Actions** → pestaña **Variables** → **New repository variable**.
    - Name: `PAGES_VIA_ACTIONS`
    - Value: `true`
 2. **Settings** → **Pages** → **Build and deployment** → Source: **GitHub Actions** (dejar de usar «Deploy from a branch»).
@@ -79,7 +79,7 @@ Todo esto lo tiene que hacer él. Un asistente no entra a esa cuenta.
    Si otra pantalla pide un índice, el mensaje de la consola del navegador trae un link para crearlo en el proyecto de prueba. No usar los links de `futbol-partidos`.
 9. **Configuración del proyecto** (engranaje al lado de «Descripción general del proyecto») → **Tus apps** → **</>** (Web). Nombre de la app: `Mis Partidos prueba`. No hace falta Hosting de Firebase. Registrar. Copiar el `firebaseConfig` (`apiKey`, `authDomain`, `projectId`, `storageBucket`, `messagingSenderId`, `appId`).
 10. Esos valores ya están en `config.prueba.js` (`projectId` `mis-partidos-prueba`). No tocar `config.js`. Si se regenera la app web, reemplazar solo ese archivo. El `projectId` nunca puede ser `futbol-partidos`.
-11. Abrir https://gustavofarg-hash.github.io/futbol-colegiales/prueba/ . Tiene que verse el cartel rojo. Crear la cuenta de administrador con `gustavof.arg@gmail.com` **en esa dirección**, no en la de producción. Es otra cuenta, en otro proyecto, aunque el mail sea el mismo.
+11. Abrir https://gustavofarg-hash.github.io/partidos/prueba/ . Tiene que verse el cartel rojo. Crear la cuenta de administrador con `gustavof.arg@gmail.com` **en esa dirección**, no en la de producción. Es otra cuenta, en otro proyecto, aunque el mail sea el mismo.
 12. Recién ahí, Ajustes → Cargar base de datos desde un backup bajado de producción.
 
 Opcional, solo si se quieren los mismos uid de Auth: en el proyecto de producción, Authentication no exporta usuarios desde la pantalla. Hace falta la CLI con la cuenta de Gustavo (`firebase auth:export` en `futbol-partidos` y `firebase auth:import` en el proyecto de prueba). Eso copia hashes de contraseña. No está automatizado en este repo y no hace falta para el modo demo.

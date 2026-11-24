@@ -147,7 +147,7 @@ const settingsText = await page.locator('#sheet').innerText();
 check('Ajustes no ofrece Business ni Dual Messenger', !/Desde qué WhatsApp|Dual Messenger|WhatsApp Business|Que el celular pregunte/.test(settingsText), settingsText.replace(/\s+/g, ' ').slice(0, 180));
 check('El admin ve hacer backup', await page.isVisible('#set-backup') && await page.isVisible('#set-restore') && await page.isVisible('#set-reset-db'));
 check('El admin ve el medidor de Firebase', (await page.locator('#usage-line').innerText()).includes('Hoy (se renueva a las 05:00)') && (await page.locator('#usage-line').innerText()).includes('lecturas de 50.000') && (await page.locator('#usage-meter').innerText()).includes('Estimación'));
-check('Ajustes muestra la versión que corre', (await page.locator('#app-version').innerText()) === 'Versión f7c-v241');
+check('Ajustes muestra la versión que corre', (await page.locator('#app-version').innerText()) === 'Versión f7c-v242');
 check('En la raíz no aparece el cartel de prueba', (await page.locator('html').getAttribute('class') || '').includes('trial') === false && await page.locator('#trial-banner').isHidden());
 check('Ajustes no repite el nombre de la app al pie', !(await page.locator('#sheet').innerText()).includes('Mis Partidos ·'));
 check('Borra la elección vieja de WhatsApp', await page.evaluate(() => localStorage.getItem('f7c-wa-from') == null));
@@ -2665,7 +2665,7 @@ await page.evaluate(() => {
 await page.click('#set-share-app');
 await page.waitForFunction(() => window.__shares?.length === 1);
 const sharedApp = await page.evaluate(() => window.__shares[0]);
-check('Compartir app manda el mensaje y el link', sharedApp.text.includes('Anotate con Mis Partidos') && sharedApp.text.includes('Instalá la app desde acá') && sharedApp.url === 'https://gustavofarg-hash.github.io/futbol-colegiales/' && sharedApp.text.includes(sharedApp.url), sharedApp.url);
+check('Compartir app manda el mensaje y el link', sharedApp.text.includes('Anotate con Mis Partidos') && sharedApp.text.includes('Instalá la app desde acá') && sharedApp.url === 'https://gustavofarg-hash.github.io/partidos/' && sharedApp.text.includes(sharedApp.url), sharedApp.url);
 await page.evaluate(() => {
   const t = document.querySelector('#toast');
   t.textContent = '';
@@ -2680,7 +2680,7 @@ const [sharePopup] = await Promise.all([page.waitForEvent('popup'), page.click('
 const shareUrl = sharePopup.url();
 await sharePopup.close();
 const shareClip = await page.evaluate(() => navigator.clipboard.readText());
-check('Sin share se copia el link y se abre WhatsApp', /wa\.me|whatsapp\.com/.test(shareUrl) && decodeURIComponent(shareUrl).includes('gustavofarg-hash.github.io/futbol-colegiales') && shareClip.includes('https://gustavofarg-hash.github.io/futbol-colegiales/'), shareUrl.slice(0, 120));
+check('Sin share se copia el link y se abre WhatsApp', /wa\.me|whatsapp\.com/.test(shareUrl) && decodeURIComponent(shareUrl).includes('gustavofarg-hash.github.io/partidos') && shareClip.includes('https://gustavofarg-hash.github.io/partidos/'), shareUrl.slice(0, 120));
 await page.click('#set-venues');
 await page.waitForSelector('#venue-list .name:text-is("Polideportivo Colegiales")');
 await page.fill('#venue-form [name=name]', 'Club Norte');
@@ -6355,7 +6355,7 @@ await page.locator('#slots .slot').first().screenshot({ path: '/opt/cursor/artif
   await page.click('#profile-share');
   await page.waitForFunction(() => (document.querySelector('#toast')?.textContent || '').includes('Enlace copiado'));
   const link = await page.evaluate(() => navigator.clipboard.readText());
-  const expectedBase = `https://gustavofarg-hash.github.io/futbol-colegiales/#/jugador/${encodeURIComponent(shared.id)}`;
+  const expectedBase = `https://gustavofarg-hash.github.io/partidos/#/jugador/${encodeURIComponent(shared.id)}`;
   const linkToken = decodeURIComponent(link.slice(expectedBase.length + 1));
   check('El enlace es el de la ficha y nombra al organizador', link.startsWith(`${expectedBase}/`) && /^[A-Za-z0-9_-]{20,}$/.test(linkToken), link);
   check('Esa ficha abre la pestaña Jugadores', await page.locator('#btn-roster').getAttribute('aria-current') === 'page');
