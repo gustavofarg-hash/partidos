@@ -147,7 +147,7 @@ const settingsText = await page.locator('#sheet').innerText();
 check('Ajustes no ofrece Business ni Dual Messenger', !/Desde qué WhatsApp|Dual Messenger|WhatsApp Business|Que el celular pregunte/.test(settingsText), settingsText.replace(/\s+/g, ' ').slice(0, 180));
 check('El admin ve hacer backup', await page.isVisible('#set-backup') && await page.isVisible('#set-restore') && await page.isVisible('#set-reset-db'));
 check('El admin ve el medidor de Firebase', (await page.locator('#usage-line').innerText()).includes('Hoy (se renueva a las 05:00)') && (await page.locator('#usage-line').innerText()).includes('lecturas de 50.000') && (await page.locator('#usage-meter').innerText()).includes('Estimación'));
-check('Ajustes muestra la versión que corre', (await page.locator('#app-version').innerText()) === 'Versión f7c-v244');
+check('Ajustes muestra la versión que corre', (await page.locator('#app-version').innerText()) === 'Versión f7c-v245');
 check('En la raíz no aparece el cartel de prueba', (await page.locator('html').getAttribute('class') || '').includes('trial') === false && await page.locator('#trial-banner').isHidden());
 check('Ajustes no repite el nombre de la app al pie', !(await page.locator('#sheet').innerText()).includes('Mis Partidos ·'));
 check('Borra la elección vieja de WhatsApp', await page.evaluate(() => localStorage.getItem('f7c-wa-from') == null));
@@ -6186,7 +6186,8 @@ async function assertGuestPromo(fix, visibleName, count) {
   check('Martín ve al jugador compartido y no uno nuevo', names.filter((name) => name.includes('Díaz')).length === 1 && names.includes('Díaz De Martín'), names.join('|'));
   await page.locator('#roster-list .slot', { hasText: 'Díaz De Martín' }).locator('.who').click();
   await page.waitForSelector('#profile-phone');
-  const martinProfile = (await page.locator('#profile').innerText()).replace(/\s+/g, ' ');
+  // v245 (pedido 4): «Pagó» muestra a todos los organizadores; el saldo y la deuda de arriba siguen siendo solo del logueado.
+  const martinProfile = `${await page.locator('#profile-phone').innerText()} ${await page.locator('#profile-balance').innerText()}`.replace(/\s+/g, ' ');
   check('Martín ve el teléfono y no el saldo ni la deuda de Gustavo', martinProfile.includes('6666') && martinProfile.includes('Crédito con Martín: $0') && !martinProfile.includes('$2.500') && !martinProfile.includes('Debe en total') && !martinProfile.includes('Gustavo'), martinProfile.slice(0, 500));
   check('El detalle sigue mostrando los partidos jugados', await page.locator('#stat-times').count() === 1);
   await page.screenshot({ path: '/opt/cursor/artifacts/screenshots/v94-ficha-martin.png' });
