@@ -1,7 +1,6 @@
 // Registro. Puro: arma las líneas y dice quién puede verlas.
 // Cada línea se escribe una vez. No se edita. El acceso queda copiado
 // del partido en ese momento, porque un partido borrado ya no existe.
-import { isRestricted } from './access.js';
 import { addDays, capitalize, labelDate, toEpoch, todayISO } from './dates.js';
 import { formatARS, hasPaymentDirection, paymentParts } from './payments.js';
 import { venueLabel } from './venues.js';
@@ -30,27 +29,47 @@ function unique(ids) {
 }
 
 /**
- * Quién puede ver la línea: quien podía ver el partido o anotar y quitar
- * jugadores, más el creador y quien anotó el evento. `*` = todos.
- * Se copia al escribir. Las líneas viejas no se reescriben: el registro
- * no se edita, y mirar el permiso de ahora cambiaría la historia.
+ * Quién puede ver la línea: el creador, quienes están en viewers o adders
+ * con su uid (no `*`), y quien anotó el evento. Un partido abierto para
+ * todos (viewers o adders `*`) no copia `*` al registro: si no, cualquier
+ * organizador ve movimientos de partidos en los que no organiza.
+ * Se copia al escribir. Las líneas viejas no se reescriben.
  */
 export function editorsOf(match, actorUid = '') {
   const me = clean(actorUid, 128);
-  if (!match) return me ? [me] : ['*'];
+  if (!match) return me ? [me] : [];
   const creator = clean(match.createdByUid, 128);
-  if (!isRestricted(match)) return ['*'];
   const viewers = (Array.isArray(match.viewers) ? match.viewers : []).filter((id) => id && id !== '*');
-  const adders = Array.isArray(match.adders) ? match.adders : null;
-  const openAdd = !adders || !adders.length || adders.includes('*');
-  const adderIds = openAdd ? [] : adders.filter((id) => id && id !== '*');
-  return unique([...viewers, ...adderIds, creator, me]).slice(0, 31);
+  const adders = (Array.isArray(match.adders) ? match.adders : []).filter((id) => id && id !== '*');
+  return unique([...viewers, ...adders, creator, me]).slice(0, 31);
 }
 
-export function canSeeLog(entry, uid) {
+/** Dueño o staff explícito del partido. `*` en viewers/adders no cuenta. */
+export function isLogStaff(match, uid) {
+  const id = clean(uid, 128);
+  if (!match || !id) return false;
+  if (clean(match.createdByUid, 128) === id) return true;
+  const viewers = Array.isArray(match.viewers) ? match.viewers : [];
+  const adders = Array.isArray(match.adders) ? match.adders : [];
+  return viewers.includes(id) || adders.includes(id);
+}
+
+/**
+ * Registro: solo lo que le toca al organizador. `editors: ['*']` (líneas
+ * viejas) no abre el registro a todo el mundo. Hace falta el uid en
+ * editors, ser quien registró el movimiento, o ser staff del partido.
+ */
+export function canSeeLog(entry, uid, matches = []) {
+  const id = String(uid || '').trim();
+  if (!id) return false;
+  if (String(entry?.actorUid || '').trim() === id) return true;
   const editors = Array.isArray(entry?.editors) ? entry.editors : [];
-  if (editors.includes('*')) return true;
-  return !!uid && editors.includes(uid);
+  if (editors.includes(id)) return true;
+  const mid = String(entry?.matchId || '').trim();
+  if (!mid) return false;
+  const list = Array.isArray(matches) ? matches : [];
+  const match = list.find((row) => row && row.id === mid) || null;
+  return isLogStaff(match, id);
 }
 
 export function matchLogFields(match, venues) {
@@ -98,7 +117,7 @@ export function blankLog(partial, actor) {
   const next = { ...base, ...partial };
   delete next.match;
   next.editors = unique(next.editors).slice(0, 31);
-  if (!next.editors.length) next.editors = next.actorUid ? [next.actorUid] : ['*'];
+  if (!next.editors.length && next.actorUid) next.editors = [next.actorUid];
   next.amount = Math.max(0, Math.round(Number(next.amount) * 100) / 100) || 0;
   next.detail = clean(next.detail, 200);
   next.playerName = clean(next.playerName, 80);

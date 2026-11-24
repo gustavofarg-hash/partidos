@@ -866,7 +866,7 @@ class LocalStore {
     const compensations = Object.entries(db.compensations || {}).map(([id, row]) => ({ id, ...row }));
     const log = Object.entries(db.log || {})
       .map(([id, row]) => ({ id, ...row }))
-      .filter((row) => canSeeLog(row, uid) && inLogRange(row, this._logRange))
+      .filter((row) => canSeeLog(row, uid, matches) && inLogRange(row, this._logRange))
       .sort((a, b) => (b.at || 0) - (a.at || 0) || String(b.id).localeCompare(String(a.id)))
       .slice(0, LOG_LIMIT);
     const windowed = historyWindow(matches, this._historyFilter, Date.now(), this._historyPages || 1);
@@ -3051,7 +3051,8 @@ export class FirebaseStore {
       limit(LOG_LIMIT),
     );
     const un = onSnapshot(q, (snap) => {
-      this.state.log = snap.docs.map((item) => ({ id: item.id, ...item.data() }));
+      const rows = snap.docs.map((item) => ({ id: item.id, ...item.data() }));
+      this.state.log = rows.filter((row) => canSeeLog(row, uid, this.state.matches));
       this.state.logError = '';
       this._emit();
     }, (e) => {

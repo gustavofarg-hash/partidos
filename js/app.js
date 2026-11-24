@@ -26,7 +26,7 @@ import { organizerChoices, organizerTagClass, sameOrganizer, sameOrganizerIdenti
 import { EDIT_LOCK_TEXT, canEditPlayer, canEditRoster, canEditRosterNick, canWritePlayer } from './edit-lock.js';
 import { amountOwed, organizerMatchDebt, owesOrganizer, playerDebt } from './ledger.js';
 import { countedForMoney, daySignupSummary, diaDatesForOrganizer, matchOrganizedBy, organizerDayShare, organizerShareByPeriod, periodBuckets, playerOrganizerMonths } from './stats.js';
-import { logText, logWhen, weekRange } from './log.js';
+import { canSeeLog, logText, logWhen, weekRange } from './log.js';
 import { autoCreditPassKey, canOfferCredit, creditAgainstDebts, creditAvailableLine, creditBalance, creditBalances, creditLoadSummary, creditPanelRows, creditReturnPlan, retroactiveCreditIds } from './credit.js';
 import { openSession, staffUsers } from './auth.js';
 import { addedCount, buildAccess, canAdd, canDelete, canEditAccess, canEditMatch, compensationApplies, importAccess, limitFor, limitMessage, matchStaff, payeeNames, publicAccess, signupForMatch, signupOptions } from './access.js';
@@ -52,7 +52,7 @@ import {
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v242';
+const APP_VERSION = 'f7c-v243';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -4761,7 +4761,7 @@ function renderRegistro(r) {
   const section = r.section === 'pagos' ? 'pagos' : 'partidos';
   if (!app.logRange) app.logRange = weekRange();
   const range = app.logRange;
-  const rows = (app.log || []).filter((entry) => entry.section === section);
+  const rows = (app.log || []).filter((entry) => entry.section === section && canSeeLog(entry, actor().uid, app.matches));
   const list = rows.length
     ? `<ul class="slots" id="log-list">${rows.map((entry) => `
       <li class="slot log-row">
