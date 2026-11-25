@@ -2122,7 +2122,7 @@ export class FirebaseStore {
     this._compUnscoped = false;
     this._named = {};
     this._unsubs = [];
-    this.state = { matches: [], players: [], roster: [], rosterNotes: {}, suspensions: [], suspensionHistory: [], payBatches: [], behavior: [], rosterError: null, organizers: [], organizersError: null, venues: [], venuesError: null, confirmations: [], prices: null, pricesError: null, credits: [], creditsError: null, creditsReady: false, playersReady: false, compensations: [], playerContacts: {}, rosterContacts: {}, historyError: '', historyHasMore: false, historyLoading: false, log: [], logError: '', confirmSeen: [], guestMatchError: '', rosterWatch: [], rosterCovered: [], rosterDates: [], statsMatches: [], statsPlayers: [], statsLoading: false, statsError: '', rosterReady: false };
+    this.state = { matches: [], players: [], roster: [], rosterNotes: {}, suspensions: [], suspensionHistory: [], payBatches: [], behavior: [], rosterError: null, organizers: [], organizersError: null, venues: [], venuesError: null, confirmations: [], prices: null, pricesError: null, credits: [], creditsError: null, creditsReady: false, playersReady: false, compensations: [], playerContacts: {}, rosterContacts: {}, historyError: '', historyHasMore: false, historyLoading: false, log: [], logError: '', confirmSeen: [], guestMatchError: '', rosterWatch: [], rosterCovered: [], rosterDates: [], statsMatches: [], statsPlayers: [], statsLoading: false, statsError: '', rosterReady: false, matchesReady: false, historyReady: false, logReady: false };
     this._noteMoves = new Set();
     this._rosterReady = false;
     this._logRange = weekRange();
@@ -3066,13 +3066,28 @@ export class FirebaseStore {
     const today = this._queryDay || todayISO();
     const q = this._applyMatchPlan(matchQueryPlan('upcoming', null, today));
     const { onSnapshot } = this.fs;
-    const un = onSnapshot(q, (snap) => {
-      if (!snap.metadata.fromCache) this.serverOk = true;
+    // v253: con metadatos. Si lo de la caché ya era igual a lo del servidor, sin
+    // esto no llegaba nunca un snapshot «del servidor» y a los 15 s salía el
+    // cartel de que no hay conexión, aunque la hubiera.
+    let had = false;
+    const un = onSnapshot(q, { includeMetadataChanges: true }, (snap) => {
+      const wasCache = this.state.fromCache;
       this._noteSnap(snap);
+      if (had && !snap.docChanges().length) {
+        // Solo cambió de dónde vino (caché → servidor) o si hay escrituras pendientes.
+        if (wasCache !== this.state.fromCache) this._emit();
+        return;
+      }
+      had = true;
       this._buckets.matches.upcoming = this._takeMatchSnap(snap);
+      // v253: los partidos de Próximos ya llegaron (de la caché o del servidor).
+      this.state.matchesReady = true;
       this._rebuild('matches');
       this._backfillMatches(snap.docs);
-    }, (e) => this._onListenError(e));
+    }, (e) => {
+      this._onListenError(e);
+      if (!this._retrying && !this.state.matchesReady) { this.state.matchesReady = true; this._emit(); }
+    });
     this._swap('upcoming', un);
   }
   _listenHistory() {
@@ -3087,9 +3102,12 @@ export class FirebaseStore {
     this._historySeen = false;
     this.state.historyHasMore = false;
     this.state.historyLoading = false;
+    // v253: hasta el primer snapshot del historial, Pasados dice «Cargando…».
+    this.state.historyReady = false;
     if (bounds.empty) {
       this._buckets.matches.history = [];
       this.state.historyError = '';
+      this.state.historyReady = true;
       this._swap('history', null);
       this._armRoster();
       this._rebuild('matches');
@@ -3102,6 +3120,7 @@ export class FirebaseStore {
       this._noteSnap(snap);
       this.state.historyError = '';
       this._historySeen = true;
+      this.state.historyReady = true;
       const rows = this._takeMatchSnap(snap);
       if (bounds.mode !== 'recent') {
         this._historyFirst = rows;
@@ -3113,12 +3132,14 @@ export class FirebaseStore {
     }, (e) => {
       if (e?.code === 'failed-precondition') {
         this.state.historyError = e.message || 'Falta un índice de Firestore para el historial.';
+        this.state.historyReady = true;
         this._buckets.matches.history = [];
         this._armRoster();
         this._rebuild('matches');
         return;
       }
       this._onListenError(e);
+      if (!this._retrying && !this.state.historyReady) { this.state.historyReady = true; this._emit(); }
     });
     this._swap('history', un);
   }
@@ -3188,10 +3209,13 @@ export class FirebaseStore {
     if (!uid) {
       this.state.log = [];
       this.state.logError = '';
+      this.state.logReady = true;
       this._swap('log', null);
       this._emit();
       return;
     }
+    // v253: hasta el primer snapshot de estas fechas, Registro dice «Cargando…».
+    this.state.logReady = false;
     const { start, end } = rangeMillis(this._logRange || weekRange());
     const { collection, query, where, orderBy, limit, onSnapshot } = this.fs;
     const q = query(
@@ -3206,6 +3230,7 @@ export class FirebaseStore {
       const rows = snap.docs.map((item) => ({ id: item.id, ...item.data() }));
       this.state.log = rows.filter((row) => canSeeLog(row, uid, this.state.matches));
       this.state.logError = '';
+      this.state.logReady = true;
       this._emit();
     }, (e) => {
       this.state.log = [];
@@ -3214,6 +3239,7 @@ export class FirebaseStore {
         : (e?.code === 'permission-denied'
           ? 'No se puede leer el registro. Hay que publicar las reglas de Firestore.'
           : ('No se pudo leer el registro: ' + (e?.message || e?.code || e)));
+      this.state.logReady = true;
       this._emit();
     });
     this._swap('log', un);
@@ -3221,6 +3247,8 @@ export class FirebaseStore {
   _noteSnap(snap) {
     const meta = snap?.metadata;
     if (!meta) return;
+    // v253: cualquier respuesta del servidor cuenta como conexión.
+    if (meta.fromCache !== true) this.serverOk = true;
     this.state.fromCache = meta.fromCache === true;
     this.state.pending = meta.hasPendingWrites === true;
   }
