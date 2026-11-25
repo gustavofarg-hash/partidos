@@ -25,7 +25,7 @@ import { MAX_NOTES, MAX_NOTE_TEXT, POSITIONS, currentMatches, filterLevelTyping,
 import { organizerChoices, organizerTagClass, sameOrganizer, sameOrganizerIdentity } from './organizers.js';
 import { EDIT_LOCK_TEXT, canEditPlayer, canEditRoster, canEditRosterNick, canWritePlayer } from './edit-lock.js';
 import { amountOwed, organizerMatchDebt, owesOrganizer, playerDebt, playerMoneyAll } from './ledger.js';
-import { countedForMoney, daySignupSummary, diaDatesForOrganizer, matchOrganizedBy, organizerDayShare, organizerShareByPeriod, periodBuckets, playerOrganizerMonths } from './stats.js';
+import { countedForMoney, daySignupSummary, diaDatesForOrganizer, matchOrganizedBy, organizerDayShare, organizerShareByPeriod, periodBuckets, playerOrganizerMonths, todayLastEnd, todayStatsReady } from './stats.js';
 import { canSeeLog, logText, logWhen, weekRange } from './log.js';
 import { autoCreditPassKey, canOfferCredit, creditAgainstDebts, creditAvailableLine, creditBalance, creditBalances, creditLoadSummary, creditPanelRows, creditReturnPlan, retroactiveCreditIds } from './credit.js';
 import { openSession, staffUsers } from './auth.js';
@@ -53,7 +53,7 @@ import {
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v250';
+const APP_VERSION = 'f7c-v251';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -4647,7 +4647,7 @@ function listedPlayers(dayMatches) {
   }
   return all.filter((player) => ids.has(player.id));
 }
-function dayShare(date, dayMatches) {
+function dayShare(date, dayMatches, todayCounts = false) {
   const me = actor();
   return organizerDayShare({
     matches: dayMatches,
@@ -4657,7 +4657,29 @@ function dayShare(date, dayMatches) {
     name: me.name,
     saved: savedCompensation(date),
     now: Date.now(),
+    todayCounts,
   });
+}
+// v251: hoy entra en Estadísticas (Día, Mes y Año) sin esperar al cambio de día
+// cuando terminó el último partido de hoy y está el cálculo de compensación
+// guardado (o, con un solo organizador, todos tienen cargado cómo pagan).
+let statsTodayTimer = null;
+function statsTodayCounts(now = Date.now()) {
+  const today = todayISO(new Date(now));
+  const matches = statsMatchList().filter((match) => match?.date === today);
+  const staff = staffUsers(app.users);
+  const active = matches.filter((match) => match.cancelled !== true);
+  const multi = !staff.length || compensationApplies(active, staff);
+  const ready = todayStatsReady({ matches, players: statsPlayerList(), multi, saved: savedCompensation(today), now });
+  // Al terminar el último partido, se vuelve a mirar sin esperar otro cambio.
+  const end = todayLastEnd(matches, now);
+  if (!ready && Number.isFinite(end) && end > now && !statsTodayTimer) {
+    statsTodayTimer = setTimeout(() => {
+      statsTodayTimer = null;
+      if (String(location.hash || '').startsWith('#/estadisticas')) render();
+    }, Math.min(end - now + 1000, 2 ** 31 - 1));
+  }
+  return ready;
 }
 function statsDayBody(id) {
   const matches = statsMatchList().filter((match) => match?.date);
@@ -4670,11 +4692,13 @@ function statsDayBody(id) {
     rows.sort((a, b) => String(a.time || '').localeCompare(String(b.time || '')) || String(a.id).localeCompare(String(b.id)));
   }
   const me = actor();
+  const todayCounts = statsTodayCounts();
   const dates = diaDatesForOrganizer({
     today: todayISO(),
     matches,
     staff: staffUsers(app.users),
     who: { uid: me.uid, name: me.name },
+    todayCounts,
   });
   const staff = staffUsers(app.users);
   const mineOf = (rows) => (rows || []).filter((match) => match.cancelled !== true && matchOrganizedBy(match, staff, me));
@@ -4688,7 +4712,7 @@ function statsDayBody(id) {
       const count = mine.length;
       const cancelled = mine.filter((match) => match.cancelled === true).length;
       const tag = cancelled ? `<span class="tag">${cancelled === count ? 'Cancelado' : `${cancelled} cancelado${cancelled === 1 ? '' : 's'}`}</span>` : '';
-      return `<li class="slot" data-date="${esc(date)}"><a class="who" href="${statsHash('dia', date)}"><div class="name">${esc(capitalize(labelDate(date)))}</div><div class="sub"><span>${count} ${count === 1 ? 'partido' : 'partidos'} · ${esc(times)}</span>${tag}</div><span class="stats-entitled">${esc(entitledLabel(dayShare(date, mine)))}</span></a></li>`;
+      return `<li class="slot" data-date="${esc(date)}"><a class="who" href="${statsHash('dia', date)}"><div class="name">${esc(capitalize(labelDate(date)))}</div><div class="sub"><span>${count} ${count === 1 ? 'partido' : 'partidos'} · ${esc(times)}</span>${tag}</div><span class="stats-entitled">${esc(entitledLabel(dayShare(date, mine, todayCounts)))}</span></a></li>`;
     }).join('');
     return `<ul class="slots" id="stats-days">${rows || '<li class="empty-wait">No hay partidos.</li>'}</ul>${statsMoreHtml()}`;
   }
@@ -4712,7 +4736,7 @@ function statsDayBody(id) {
   return `
     <p class="hint"><a href="${statsHash('dia')}">Todos los días</a></p>
     <h2 class="section" id="stats-day">${esc(capitalize(labelDate(wanted)))}</h2>
-    <p class="stats-entitled" id="stats-entitled">${esc(entitledLabel(dayShare(wanted, dayMatches)))}</p>
+    <p class="stats-entitled" id="stats-entitled">${esc(entitledLabel(dayShare(wanted, dayMatches, todayCounts)))}</p>
     <p id="stats-day-signed">Anotaste en el día: ${esc(spotCountLabel(summary.spots))}</p>
     <p id="stats-day-paid">Pagaron: ${esc(formatARS(summary.paid))}</p>
     ${blocks}`;
@@ -4732,7 +4756,7 @@ function periodCountLabel(bucket) {
   const players = `${n} ${n === 1 ? 'jugador anotado' : 'jugadores anotados'}`;
   return `${matches} · ${players}`;
 }
-function periodShares(grain) {
+function periodShares(grain, todayCounts = false) {
   const me = actor();
   return organizerShareByPeriod({
     matches: statsMatchList(),
@@ -4743,11 +4767,13 @@ function periodShares(grain) {
     grain,
     savedFor: savedCompensation,
     now: Date.now(),
+    todayCounts,
   });
 }
 function statsPeriodBody(grain, id) {
   const mode = grain === 'year' ? 'anio' : 'mes';
   const me = actor();
+  const todayCounts = statsTodayCounts();
   const buckets = periodBuckets({
     matches: statsMatchList(),
     players: statsPlayerList(),
@@ -4756,8 +4782,9 @@ function statsPeriodBody(grain, id) {
     who: { uid: me.uid, name: me.name },
     staff: staffUsers(app.users),
     now: Date.now(),
+    todayCounts,
   });
-  const shares = periodShares(grain);
+  const shares = periodShares(grain, todayCounts);
   const today = todayISO();
   // v245 (pedido 19): un mes entra cuando está entero; un año, mientras le falten
   // meses, dice que el total todavía se está sumando.
