@@ -153,7 +153,8 @@ class DemoSession {
 }
 
 class FirebaseSession {
-  constructor() { this.mode = 'firebase'; this.user = null; this.users = []; this.listeners = new Set(); this.error = ''; }
+  // v253: usersReady es false hasta que llega la lista de organizadores (o falla).
+  constructor() { this.mode = 'firebase'; this.user = null; this.users = []; this.usersReady = false; this.listeners = new Set(); this.error = ''; }
   subscribe(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
   _emit() { this.listeners.forEach((fn) => fn(this)); }
   async init() {
@@ -207,9 +208,11 @@ class FirebaseSession {
     this._unwatch = onSnapshot(collection(this.fb.db, 'users'), (snap) => {
       this._userRetries = 0;
       this.users = snap.docs.map((item) => publicUser(item.id, item.data()));
+      this.usersReady = true;
       this._emit();
     }, (error) => {
       console.error(error);
+      this.usersReady = true;
       if (error?.code === 'permission-denied' && (this._userRetries || 0) < 2) {
         this._userRetries = (this._userRetries || 0) + 1;
         const retry = this.auth?.currentUser?.getIdToken(true);
