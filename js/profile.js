@@ -640,3 +640,15 @@ export function noteWhen(note, matches) {
   const match = (matches || []).find((m) => m.id === note?.matchId);
   return whenLabel(match || { date: note?.matchDate, time: note?.matchTime });
 }
+
+/**
+ * v252: qué muestra un link #/jugador/{id} con sesión.
+ * profile: la ficha (es suya, o vino desde un partido). signup: Autoservicio de esa ficha.
+ * loading: Jugadores todavía no llegó; no se sabe si la ficha existe, así que «Cargando…»
+ * en vez de «NO TENÉS ACCESO» un instante. denied: Jugadores ya llegó y la ficha no está.
+ */
+export function playerLinkView({ person = null, held = false, fromMatch = false, rosterReady = true } = {}) {
+  if (fromMatch || (person && held)) return 'profile';
+  if (person) return 'signup';
+  return rosterReady === false ? 'loading' : 'denied';
+}

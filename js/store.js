@@ -2122,7 +2122,7 @@ export class FirebaseStore {
     this._compUnscoped = false;
     this._named = {};
     this._unsubs = [];
-    this.state = { matches: [], players: [], roster: [], rosterNotes: {}, suspensions: [], suspensionHistory: [], payBatches: [], behavior: [], rosterError: null, organizers: [], organizersError: null, venues: [], venuesError: null, confirmations: [], prices: null, pricesError: null, credits: [], creditsError: null, creditsReady: false, playersReady: false, compensations: [], playerContacts: {}, rosterContacts: {}, historyError: '', historyHasMore: false, historyLoading: false, log: [], logError: '', confirmSeen: [], guestMatchError: '', rosterWatch: [], rosterCovered: [], rosterDates: [], statsMatches: [], statsPlayers: [], statsLoading: false, statsError: '' };
+    this.state = { matches: [], players: [], roster: [], rosterNotes: {}, suspensions: [], suspensionHistory: [], payBatches: [], behavior: [], rosterError: null, organizers: [], organizersError: null, venues: [], venuesError: null, confirmations: [], prices: null, pricesError: null, credits: [], creditsError: null, creditsReady: false, playersReady: false, compensations: [], playerContacts: {}, rosterContacts: {}, historyError: '', historyHasMore: false, historyLoading: false, log: [], logError: '', confirmSeen: [], guestMatchError: '', rosterWatch: [], rosterCovered: [], rosterDates: [], statsMatches: [], statsPlayers: [], statsLoading: false, statsError: '', rosterReady: false };
     this._noteMoves = new Set();
     this._rosterReady = false;
     this._logRange = weekRange();
@@ -3752,6 +3752,8 @@ export class FirebaseStore {
       this.state.roster = snap.docs.map((d) => rosterSeenBy({ id: d.id, ...d.data() }, this.actor));
       this.state.rosterError = null;
       this._rosterReady = true;
+      // v252: hasta acá Jugadores no llegó; un link #/jugador/... espera en vez de «NO TENÉS ACCESO».
+      this.state.rosterReady = true;
       this._emit();
       this._migrateContacts();
       this._claimLegacyNotes();
@@ -3759,6 +3761,7 @@ export class FirebaseStore {
       void this._syncLinkMirrors();
     }, (e) => {
       this.state.rosterError = isRosterDenied(e) ? ROSTER_DENIED_READ : ('No se pudo leer Jugadores: ' + (e?.message || e?.code || e));
+      this.state.rosterReady = true;
       this._emit();
     });
     // v237: claves de los links reseteados (solo organizadores).
