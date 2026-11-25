@@ -53,7 +53,7 @@ import {
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v249';
+const APP_VERSION = 'f7c-v250';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -2346,7 +2346,7 @@ function renderMatch(id) {
     ${waitingSection(m, everyone.length >= cap, readOnly)}
     ${noPlaySection(m, readOnly)}
     ${usualSection(m)}
-    ${canEdit && signed > 0 && !m.cancelled && !matchAlreadyPlayed(m) ? '<button type="button" class="btn danger solid block" id="btn-cancel-match">Cancelar partido</button>' : ''}
+    ${canEdit && !m.cancelled && !matchAlreadyPlayed(m) ? '<button type="button" class="btn danger solid block" id="btn-cancel-match">Cancelar partido</button>' : ''}
     ${showMatchCompensation(m) ? matchCompensationHtml(m.date) : ''}
     <div class="actionbar"><div class="actionbar-inner match-actions">
       <button type="button" class="btn share-btn" id="btn-share" aria-label="Compartir lista">${ICON.share}</button>
@@ -2767,7 +2767,7 @@ function openCancel(m) {
   openSheet(`
     <form id="cancel-form" novalidate>
       <h3>Cancelar partido</h3>
-      <p class="hint">Queda cancelado, con sus ${signed} jugadores. No se borra. No se mandan recordatorios y el link de confirmación deja de pedir sí o no.</p>
+      <p class="hint" id="cancel-hint">${signed > 0 ? `Queda cancelado, con sus ${signed} jugadores. No se borra.` : 'Queda cancelado. No se borra.'} No se mandan recordatorios y el link de confirmación deja de pedir sí o no.</p>
       <p class="hint">Si querés, escribí el motivo en las notas.</p>
       <label class="field"><span>Notas</span><textarea id="cancel-notes" name="notes" maxlength="2000">${esc(m.notes || '')}</textarea></label>
       <div class="sheet-actions"><button type="button" class="btn" data-close>Volver</button><button class="btn danger" type="submit">Cancelar partido</button></div>
@@ -2801,6 +2801,8 @@ async function reactivateMatch(m) {
 
 async function offerCancelWhatsApp(match) {
   const people = [...playersOf(match.id), ...waitingOf(match.id)];
+  // v250: sin nadie anotado no hay a quién avisar: no se ofrece WhatsApp ni se muestra aviso.
+  if (!people.length) return;
   const links = cancelLinks({ match, players: people, venue: placeOf(match), roster: app.roster });
   if (!links.length) {
     toast(people.some(phoneHidden) ? PRIVATE_WA_TEXT : 'Nadie tiene WhatsApp para avisar la cancelación.');
