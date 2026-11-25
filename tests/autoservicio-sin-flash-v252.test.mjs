@@ -25,7 +25,7 @@ test('la ficha es de otro organizador: Autoservicio; es suya o viene de un parti
 
 test('el store con sesión arranca con rosterReady en false y lo pone en true al llegar Jugadores (o al fallar)', () => {
   const src = readFileSync(new URL('../js/store.js', import.meta.url), 'utf8');
-  assert.match(src, /statsError: '', rosterReady: false \};/);
+  assert.match(src, /statsError: '', rosterReady: false[,} ]/);
   assert.equal((src.match(/this\.state\.rosterReady = true;/g) || []).length, 2);
   const app = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
   assert.match(app, /app\.rosterReady = view\.rosterReady !== false;/);

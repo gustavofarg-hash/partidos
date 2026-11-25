@@ -53,7 +53,7 @@ import {
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v252';
+const APP_VERSION = 'f7c-v253';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -1552,6 +1552,14 @@ function matchCard(m, opts = {}) {
   </a>${debt}</li>`;
 }
 
+/** v253: el «Cargando…» de siempre, en lugar de un «No hay…» antes de que lleguen los datos. */
+function loadingHtml(id) {
+  return `<div class="loading" id="${esc(id)}">Cargando…</div>`;
+}
+function statsDataReady() {
+  return app.matchesReady !== false && app.historyReady !== false && statsMonthReady(todayISO().slice(0, 7));
+}
+
 function renderHome(focusPending = false) {
   const upcoming = currentMatches(app.matches);
   const { next, later } = splitNear(upcoming);
@@ -1562,9 +1570,9 @@ function renderHome(focusPending = false) {
   if (!replaceView(`
     ${confirmBanner()}${pendingSignupBlock()}${reminderBanners(next)}
     <h2 class="section">Próximos 7 días</h2>
-    ${next.length ? `<ul class="match-list" id="list-next">${next.map(matchCard).join('')}</ul>` : `
+    ${next.length ? `<ul class="match-list" id="list-next">${next.map(matchCard).join('')}</ul>` : (!later.length && app.matchesReady === false ? loadingHtml('home-loading') : `
       <div class="empty" id="home-empty"><div class="big">⚽</div><p><b>No hay partidos en los próximos 7 días.</b></p>
-      <p class="small">${emptyHint}</p></div>`}
+      <p class="small">${emptyHint}</p></div>`)}
     ${later.length ? `<button type="button" class="later-toggle" id="btn-later" aria-expanded="${open ? 'true' : 'false'}">${open ? 'Ocultar más adelante' : `Ver más adelante (${later.length})`}</button>` : ''}
     ${open ? `<h2 class="section">Más adelante</h2><ul class="match-list" id="list-later">${later.map(matchCard).join('')}</ul>` : ''}
     <div class="actionbar"><div class="actionbar-inner">
@@ -2090,9 +2098,9 @@ function renderHistory() {
     ${app.historyError ? `<div class="banner error" id="hist-error">${esc(app.historyError)}</div>` : ''}
     ${app.rosterError ? `<div class="banner error" id="roster-error">${esc(app.rosterError)}</div>` : ''}
     ${rosterWait ? '<p class="hint" id="hist-loading">Cargando jugadores…</p>' : ''}
-    ${past.length ? `<ul class="match-list" id="list-history">${historyWithCompensation(past)}</ul>` : (rosterWait ? '' : `
+    ${past.length ? `<ul class="match-list" id="list-history">${historyWithCompensation(past)}</ul>` : (rosterWait ? '' : (app.historyReady === false ? loadingHtml('hist-wait') : `
       <div class="empty" id="list-history"><div class="big">📅</div><p><b>${esc(emptyLead)}</b></p>
-      <p class="small">${active ? 'Limpiar vuelve a los últimos 30.' : 'Cuando pase el día, el partido sale de Próximos partidos y queda acá.'}</p></div>`)}
+      <p class="small">${active ? 'Limpiar vuelve a los últimos 30.' : 'Cuando pase el día, el partido sale de Próximos partidos y queda acá.'}</p></div>`))}
     ${app.historyHasMore ? `<button type="button" class="btn block" id="hist-more"${app.historyLoading ? ' disabled' : ''}>${app.historyLoading ? 'Cargando…' : 'Cargar más'}</button>` : ''}`)) return;
   $('#history-filter').onsubmit = (e) => {
     e.preventDefault();
@@ -4070,6 +4078,7 @@ function rosterBodyHtml() {
   const empty = q
     ? 'Nadie coincide con esa búsqueda.'
     : (debtOn ? 'Nadie te debe de los partidos ya jugados.' : 'Todavía no hay jugadores guardados. Cuando anotás a alguien en un partido, se guarda acá. El WhatsApp es opcional.');
+  if (!people.length && app.rosterReady === false) return `<div class="loading" id="roster-list">Cargando…</div>`;
   return people.length ? `<ul class="slots" id="roster-list">${rosterRowsHtml(people)}</ul>` : `<p class="empty-wait" id="roster-list">${esc(empty)}</p>`;
 }
 
@@ -4631,7 +4640,7 @@ function statsPlayerBody(id) {
       const rows = people.map((item) => `<li class="slot"><a class="who" href="${statsHash('jugador', item.id)}"><div class="name${fichaSuspended(item)}">${fichaName(item, item.name)}</div></a></li>`).join('');
       list = people.length
         ? `<ul class="slots" id="stats-players">${rows}</ul>`
-        : `<p class="empty-wait" id="stats-players">${q ? 'Nadie coincide con esa búsqueda.' : 'No hay jugadores en tu agenda.'}</p>`;
+        : (app.rosterReady === false ? '<div class="loading" id="stats-players">Cargando…</div>' : `<p class="empty-wait" id="stats-players">${q ? 'Nadie coincide con esa búsqueda.' : 'No hay jugadores en tu agenda.'}</p>`);
     }
   }
   return `
@@ -4716,6 +4725,7 @@ function statsDayBody(id) {
       const tag = cancelled ? `<span class="tag">${cancelled === count ? 'Cancelado' : `${cancelled} cancelado${cancelled === 1 ? '' : 's'}`}</span>` : '';
       return `<li class="slot" data-date="${esc(date)}"><a class="who" href="${statsHash('dia', date)}"><div class="name">${esc(capitalize(labelDate(date)))}</div><div class="sub"><span>${count} ${count === 1 ? 'partido' : 'partidos'} · ${esc(times)}</span>${tag}</div><span class="stats-entitled">${esc(entitledLabel(dayShare(date, mine, todayCounts)))}</span></a></li>`;
     }).join('');
+    if (!rows && !statsDataReady()) return loadingHtml('stats-days');
     return `<ul class="slots" id="stats-days">${rows || '<li class="empty-wait">No hay partidos.</li>'}</ul>${statsMoreHtml()}`;
   }
   const wanted = /^\d{4}-\d{2}-\d{2}$/.test(id) ? id : (matches.find((item) => item.id === id)?.date || '');
@@ -4799,6 +4809,7 @@ function statsPeriodBody(grain, id) {
       return `<li class="slot" data-period="${esc(bucket.key)}"><a class="who" href="${statsHash(mode, bucket.key)}"><div class="name">${esc(bucket.label)}</div><div class="sub"><span>${periodCountLabel(bucket)}</span><span>${esc(formatARS(bucket.signedAmount))}</span></div>${mine}${partialNote(bucket.key)}</a></li>`;
     }).join('');
     const more = grain === 'month' ? statsMoreHtml() : '';
+    if (!rows && !statsDataReady()) return loadingHtml('stats-periods');
     return `<ul class="slots" id="stats-periods">${rows || '<li class="empty-wait">No hay partidos.</li>'}</ul>${more}`;
   }
   const bucket = buckets.find((item) => item.key === id);
@@ -4926,7 +4937,9 @@ function renderRegistro(r) {
           <div class="sub">${esc(logText(entry))}</div>
         </div>
       </li>`).join('')}</ul>`
-    : `<p class="empty-wait" id="log-empty">${app.logError ? esc(app.logError) : 'No hay registros en estas fechas.'}</p>`;
+    : (!app.logError && app.logReady === false
+      ? '<div class="loading" id="log-loading">Cargando…</div>'
+      : `<p class="empty-wait" id="log-empty">${app.logError ? esc(app.logError) : 'No hay registros en estas fechas.'}</p>`);
   if (!replaceView(`
     <div id="log-view">
       <h2 class="section" id="log-title">Registro de movimientos</h2>
@@ -4988,7 +5001,7 @@ function renderUsers() {
   if (!replaceView(`
     <h2 class="section">Organizadores</h2>
     <p class="hint roster-lead">Esta es la única diferencia con los organizadores: crear, desactivar o borrar sus cuentas. El rol no se cambia. En los partidos pueden lo mismo.</p>
-    <ul class="slots" id="user-list">${rows || '<li class="empty-wait">No hay usuarios.</li>'}</ul>
+    <ul class="slots" id="user-list">${rows || (app.session?.usersReady === false ? '<li class="loading" id="users-loading">Cargando…</li>' : '<li class="empty-wait">No hay usuarios.</li>')}</ul>
     <form id="user-form" class="user-form" novalidate>
       <h2 class="section">Nuevo organizador</h2>
       <label class="field"><span>Nombre</span><input name="name" maxlength="40" autocomplete="off" autocapitalize="words" data-cap-words="1" placeholder="Ej: Lucía"></label>
@@ -9172,6 +9185,7 @@ async function boot() {
     await app.session.init();
   }
   app.users = app.session.users || [];
+  app.usersShown = app.session.usersReady !== false;
   app.session.subscribe(() => {
     const users = app.session.users || [];
     const user = app.session.user;
@@ -9189,7 +9203,10 @@ async function boot() {
       app.store.setLogStaff(users);
     }
     if (sheet.open && app.refreshPaySheet) app.refreshPaySheet();
-    if (!sameSession && app.loaded && (!sheet.open || !sheet.querySelector('input, textarea')) && location.hash !== '#/usuarios') render();
+    // v253: en Usuarios no se redibuja con cada cambio, salvo cuando la lista llega por primera vez (sale de «Cargando…»).
+    const usersArrived = app.usersShown === false && app.session.usersReady !== false;
+    app.usersShown = app.session.usersReady !== false;
+    if (!sameSession && app.loaded && (!sheet.open || !sheet.querySelector('input, textarea')) && (location.hash !== '#/usuarios' || usersArrived)) render();
   });
   while (!app.session.user && !isPlayerDeepLink(location.hash)) {
     lockShell();
@@ -9243,6 +9260,10 @@ async function boot() {
     app.rosterError = view.rosterError || '';
     // v252: con sesión, Jugadores todavía no llegó (el demo no manda el campo: está listo).
     app.rosterReady = view.rosterReady !== false;
+    // v253: lo mismo para Próximos, Pasados y Registro (el demo no manda los campos: listos).
+    app.matchesReady = view.matchesReady !== false;
+    app.historyReady = view.historyReady !== false;
+    app.logReady = view.logReady !== false;
     app.roster = roster || [];
     const pendingRoster = withPendingRoster(app.roster, app.rosterPending, Date.now());
     app.roster = pendingRoster.roster;
@@ -9289,7 +9310,7 @@ async function boot() {
     if (!app.guestPlayer && pricesError && pricesError !== app.pricesError) showError(adminOnlyDetail(pricesError, isAdminUser()));
     app.pricesError = pricesError || null;
     app.loaded = true;
-    const stamp = JSON.stringify([app.matches, app.players, app.history, app.historyMeta, app.historyError, app.historyHasMore, app.historyLoading, app.rosterWatch, app.rosterCovered, app.rosterDates, app.roster, app.suspensions, app.suspensionHistory, app.payBatches, app.behavior, app.organizers, app.venues, app.prices, app.credits, app.compensations, app.log, app.logError, app.rosterError, app.organizersError, app.venuesError, app.pricesError, app.creditsError, app.confirmSeen, app.guestMatchError, app.statsMatches, app.statsPlayers, app.statsLoading, app.statsError, app.guestBlocked, app.guestReady, app.guestAccessError, app.guestHiddenError]);
+    const stamp = JSON.stringify([app.matches, app.players, app.history, app.historyMeta, app.historyError, app.historyHasMore, app.historyLoading, app.rosterWatch, app.rosterCovered, app.rosterDates, app.roster, app.suspensions, app.suspensionHistory, app.payBatches, app.behavior, app.organizers, app.venues, app.prices, app.credits, app.compensations, app.log, app.logError, app.rosterError, app.organizersError, app.venuesError, app.pricesError, app.creditsError, app.confirmSeen, app.guestMatchError, app.statsMatches, app.statsPlayers, app.statsLoading, app.statsError, app.guestBlocked, app.guestReady, app.guestAccessError, app.guestHiddenError, app.rosterReady, app.matchesReady, app.historyReady, app.logReady]);
     const changed = stamp !== app.viewStamp;
     app.viewStamp = stamp;
     scheduleRetroactiveAutoCredit();

@@ -178,7 +178,7 @@ test('la app usa lo pedido en Día, Mes, Año y Jugador', () => {
     /const buckets = periodBuckets\(\{\n    matches: statsMatchList\(\),\n    players: statsPlayerList\(\),/,
     /players: statsPlayerList\(\),\n      matches: statsMatchList\(\),/,
   ]) assert.match(app, re);
-  assert.match(app, /app\.statsMatches, app\.statsPlayers, app\.statsLoading, app\.statsError, app\.guestBlocked, app\.guestReady, app\.guestAccessError, app\.guestHiddenError\]\);/);
+  assert.match(app, /app\.statsMatches, app\.statsPlayers, app\.statsLoading, app\.statsError, app\.guestBlocked, app\.guestReady, app\.guestAccessError, app\.guestHiddenError(, [^\]]+)?\]\);/);
   assert.match(app, /id="stats-older"/);
   assert.ok(sw.includes("'js/stats-range.js'"));
 });
