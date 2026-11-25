@@ -1,15 +1,63 @@
 // Totales para la pestaña Estadísticas. Puro: no lee Firebase.
 // Un partido cancelado no suma plata ni cupo. La espera no debe.
-import { dayCompensation, matchAdders, matchCompensation } from './compensate.js';
+import { dayCompensation, matchAdders, matchCompensation, playerNeedsPayState } from './compensate.js';
+import { todayISO } from './dates.js';
 import { groupByInviter } from './guests.js';
 import { monthKeyOf, monthLabel } from './ledger.js';
 import { sameOrganizer, sameOrganizerIdentity, UNSPECIFIED } from './organizers.js';
 import { isFreePlay, paymentParts, paymentShares, roundARS } from './payments.js';
 import { priceOfMatch, promoForPlayer } from './prices.js';
-import { matchAlreadyPlayed } from './profile.js';
+import { matchAlreadyPlayed, startsAtOf } from './profile.js';
 import { foldText, personKey, playerMatchesPerson } from './roster.js';
 import { matchCapacity } from './venues.js';
 import { rosterSplit } from './waiting.js';
+
+/**
+ * v251: cuánto dura un partido para Estadísticas. No hay hora de fin guardada:
+ * el partido de hoy se da por terminado esta cantidad de tiempo después del saque.
+ */
+export const MATCH_LENGTH_MS = 60 * 60 * 1000;
+
+/**
+ * v251: hoy entra en Estadísticas (Día, Mes y Año) sin esperar al cambio de día
+ * cuando terminó el último partido no cancelado de hoy y además:
+ * - con más de un organizador (hay botón de compensación): ya está guardado el
+ *   cálculo de compensación del día (compensations/{fecha}). Si después «cambió»,
+ *   vale lo guardado hasta Recalcular, igual que los días anteriores;
+ * - con un solo organizador: todos los jugadores del día (sin la espera) tienen
+ *   cargado cómo pagan (efectivo, transferencia, crédito, transfiere después o gratis).
+ * Si todos los partidos de hoy están cancelados, hoy entra enseguida (suma
+ * «cancelados» como cualquier día). `matches`: los de hoy de todos los organizadores. Puro.
+ */
+export function todayStatsReady({ matches, players, multi = false, saved = null, now = Date.now(), length = MATCH_LENGTH_MS } = {}) {
+  const today = todayISO(new Date(now));
+  const ofToday = (matches || []).filter((match) => match?.id && match.date === today);
+  if (!ofToday.length) return false;
+  const active = ofToday.filter((match) => match.cancelled !== true);
+  // Todos cancelados: no hay nada que jugar ni cobrar, entra ya y suma «cancelados»
+  // como los días anteriores.
+  if (!active.length) return true;
+  const starts = active.map((match) => startsAtOf(match));
+  if (starts.some((start) => !Number.isFinite(start))) return false;
+  const lastEnd = Math.max(...starts) + length;
+  if (now < lastEnd) return false;
+  if (multi) return Array.isArray(saved?.rows);
+  const ids = new Set(active.map((match) => match.id));
+  return !(players || []).some((player) => player && ids.has(player.matchId) && player.waiting !== true && playerNeedsPayState(player));
+}
+
+/** v251: cuándo termina el último partido de hoy (ms) o NaN si no hay. */
+export function todayLastEnd(matches, now = Date.now(), length = MATCH_LENGTH_MS) {
+  const today = todayISO(new Date(now));
+  const starts = (matches || []).filter((match) => match?.date === today && match.cancelled !== true).map((match) => startsAtOf(match)).filter(Number.isFinite);
+  return starts.length ? Math.max(...starts) + length : NaN;
+}
+
+/** Ya pasó, o es hoy y hoy ya entra (v251). */
+function countsForStats(match, now, todayCounts) {
+  if (matchAlreadyPlayed(match, now)) return true;
+  return todayCounts === true && match?.date === todayISO(new Date(now));
+}
 
 const METHOD_LABEL = {
   cash: 'Efectivo',
@@ -306,12 +354,12 @@ function signedMoney(groups) {
 
 /**
  * Mes o año. Los partidos son los que organiza quien está logueado, ya jugados
- * (el mismo corte que el historial) y sin cancelados. Hoy y los que faltan no
- * entran. Los jugadores son los lugares que anotó él y que tienen plata paga o
+ * (el mismo corte que el historial) y sin cancelados. Hoy entra solo con
+ * todayCounts (v251, ver todayStatsReady); los que faltan no entran. Los jugadores son los lugares que anotó él y que tienen plata paga o
  * adeudada. El monto es esa plata, sin importar quién la cobró.
  * Sin `who`, sigue el total del partido: gente distinta y lo cobrado.
  */
-export function periodBuckets({ matches, players, prices, grain = 'month', who, staff, now = Date.now() } = {}) {
+export function periodBuckets({ matches, players, prices, grain = 'month', who, staff, now = Date.now(), todayCounts = false } = {}) {
   const person = who && typeof who === 'object' ? who : null;
   const buckets = new Map();
   const source = matches || [];
@@ -319,7 +367,7 @@ export function periodBuckets({ matches, players, prices, grain = 'month', who, 
   const spotCtx = { players, matches: source, prices };
   for (const match of visible) {
     if (!match?.id || !/^\d{4}-\d{2}-\d{2}$/.test(match.date || '')) continue;
-    if (!matchAlreadyPlayed(match, now)) continue;
+    if (!countsForStats(match, now, todayCounts)) continue;
     const key = grain === 'year' ? match.date.slice(0, 4) : monthKeyOf(match.date);
     if (!key) continue;
     if (!buckets.has(key)) buckets.set(key, emptyPeriod(key, grain));
@@ -486,16 +534,16 @@ function dayCollected(matches, players, staff) {
 
 /**
  * Lo que le corresponde a esta persona en el día.
- * Solo entran los partidos de ese día que ya se jugaron. Hoy y los que faltan
- * no suman. Un cancelado tampoco.
+ * Solo entran los partidos de ese día que ya se jugaron (hoy, solo con todayCounts,
+ * v251, ver todayStatsReady). Los que faltan no suman. Un cancelado tampoco.
  * Si el día tiene cálculo de compensación guardado, vale su fila de ahí.
  * Si no: un solo organizador, todo lo cobrado. Más de uno: su fila de
  * dayCompensation según el modo de cada partido. En partes iguales entran
  * todos los que pueden anotar en el partido (canAdd), anoten o no.
  * No es la suma de lo que cobraron todos.
  */
-export function organizerDayShare({ matches, players, staff, uid, name, who, saved = null, now = Date.now() } = {}) {
-  const played = (matches || []).filter((match) => matchAlreadyPlayed(match, now));
+export function organizerDayShare({ matches, players, staff, uid, name, who, saved = null, now = Date.now(), todayCounts = false } = {}) {
+  const played = (matches || []).filter((match) => countsForStats(match, now, todayCounts));
   const person = who && typeof who === 'object' ? who : { uid: uid || '', name: name || '' };
   if (!played.some((match) => match?.cancelled !== true)) return 0;
   // Con cálculo guardado manda lo guardado: «le corresponden» de su fila.
@@ -554,16 +602,16 @@ export function currentMonthDiaDates({ today, done } = {}) {
 /**
  * Estadísticas > Día: todos los partidos ya jugados de este mes, no cancelados,
  * en los que organiza quien está logueado. No hace falta un cálculo guardado.
- * Hoy no entra: todavía no se jugó. Gus y Gustavo son el mismo organizador.
+ * Hoy entra solo con todayCounts (v251, ver todayStatsReady). Gus y Gustavo son el mismo organizador.
  */
-export function diaDatesForOrganizer({ today, matches, staff, who } = {}) {
+export function diaDatesForOrganizer({ today, matches, staff, who, todayCounts = false } = {}) {
   const person = who && typeof who === 'object' ? who : { uid: '', name: '' };
   if (!ISO_DAY.test(today || '')) return [];
   const monthStart = `${today.slice(0, 7)}-01`;
   const dates = new Set();
   for (const match of matches || []) {
     const date = String(match?.date || '');
-    if (!ISO_DAY.test(date) || date < monthStart || date >= today) continue;
+    if (!ISO_DAY.test(date) || date < monthStart || date > today || (date === today && todayCounts !== true)) continue;
     if (match.cancelled === true) continue;
     if (!matchOrganizedBy(match, staff, person)) continue;
     dates.add(date);
@@ -622,7 +670,7 @@ export function playerOrganizerMonths({ person, players, matches, who, now = Dat
  * organizador suma lo que esa función le asigna.
  * Mes y Año suman los días ya jugados; un día con cálculo guardado usa lo guardado.
  */
-export function organizerShareByPeriod({ matches, players, staff, uid, name, who, grain = 'month', savedFor = null, now = Date.now() } = {}) {
+export function organizerShareByPeriod({ matches, players, staff, uid, name, who, grain = 'month', savedFor = null, now = Date.now(), todayCounts = false } = {}) {
   const byDay = new Map();
   for (const match of matches || []) {
     if (!match?.id || !/^\d{4}-\d{2}-\d{2}$/.test(match.date || '')) continue;
@@ -634,7 +682,7 @@ export function organizerShareByPeriod({ matches, players, staff, uid, name, who
     const key = grain === 'year' ? date.slice(0, 4) : monthKeyOf(date);
     if (!key) continue;
     const saved = typeof savedFor === 'function' ? savedFor(date) : null;
-    const share = organizerDayShare({ matches: dayMatches, players, staff, uid, name, who, saved, now });
+    const share = organizerDayShare({ matches: dayMatches, players, staff, uid, name, who, saved, now, todayCounts });
     totals.set(key, roundARS((totals.get(key) || 0) + share));
   }
   return totals;
