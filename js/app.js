@@ -21,7 +21,7 @@ import { LINK_INVALID_TEXT, canResetLink, linkResetQuestion } from './link-reset
 import { activityNoticeText, activityNotices } from './notify.js';
 import { ROSTER_DENIED_WRITE, SUSPENDED_TEXT, activeSuspensions, blockingSuspensions, canonicalPhone, capitalizeWords, cleanShortName, displayName, foldText, fullNameBehind, givenName, nickOf, isRosterDenied, personKey, playersSeenBy, rosterSeenBy, phoneIdentity, playerMatchesPerson, rosterByIdentity, rosterByPhone, rosterForOrganizer, rosterHeldBy, rosterIdForSuspension, searchRoster, suspensionHistoryOf, visibleRosterHits, visibleRosterPhone, withPendingRoster } from './roster.js';
 import { ALREADY_IN_MATCH, alreadyInMatch, attachRosterGuest, duplicateText, isDuplicateText, firstDuplicate, groupByInviter, inviteBlock, isAutoGuestName, isGuest, normName, placeGroup, resolveFriendNames, rootInviterId, sameDayPromoGuestRenames, waitWarning } from './guests.js';
-import { MAX_NOTES, MAX_NOTE_TEXT, POSITIONS, currentMatches, filterLevelTyping, formatLevel, keptSignupIds, levelCaretAfterStep, levelStepSide, matchAlreadyPlayed, matchSignupState, noteWhen, parseLevel, pastMatches, playerRecord, playerStats, rosterDeleteReasons, sortedNotes, splitNear, stepLevel, storedLevel, upcomingMatches } from './profile.js';
+import { MAX_NOTES, MAX_NOTE_TEXT, POSITIONS, currentMatches, filterLevelTyping, formatLevel, keptSignupIds, levelCaretAfterStep, levelStepSide, matchAlreadyPlayed, matchSignupState, noteWhen, parseLevel, pastMatches, playerLinkView, playerRecord, playerStats, rosterDeleteReasons, sortedNotes, splitNear, stepLevel, storedLevel, upcomingMatches } from './profile.js';
 import { organizerChoices, organizerTagClass, sameOrganizer, sameOrganizerIdentity } from './organizers.js';
 import { EDIT_LOCK_TEXT, canEditPlayer, canEditRoster, canEditRosterNick, canWritePlayer } from './edit-lock.js';
 import { amountOwed, organizerMatchDebt, owesOrganizer, playerDebt, playerMoneyAll } from './ledger.js';
@@ -53,7 +53,7 @@ import {
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v251';
+const APP_VERSION = 'f7c-v252';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -1258,7 +1258,9 @@ function render() {
     if (releaseAnonymousLock) return;
     if (r.name === 'profile' && playerLinkDenied(r.id)) {
       const person = (app.roster || []).find((row) => row.id === r.id);
-      if (person) renderPlayerSignup(person);
+      const view = playerLinkView({ person, held: false, rosterReady: app.rosterReady });
+      if (view === 'signup') renderPlayerSignup(person);
+      else if (view === 'loading') showGuestLoading();
       else showAnonymousDenial();
       return;
     }
@@ -5023,9 +5025,12 @@ let levelCaretIntent = null;
 function renderProfile(id) {
   const person = app.roster.find((r) => r.id === id);
   const fromMatch = app.profileViaMatchId === id;
-  if (!fromMatch && (!person || !rosterHeldBy(person, actor()))) {
+  // v252: el link llegó antes que Jugadores: «Cargando…», no «NO TENÉS ACCESO» un instante.
+  const linkView = playerLinkView({ person, held: !!person && rosterHeldBy(person, actor()), fromMatch, rosterReady: app.rosterReady });
+  if (linkView !== 'profile') {
     app.signupDraft = null;
-    if (person) renderPlayerSignup(person);
+    if (linkView === 'signup') renderPlayerSignup(person);
+    else if (linkView === 'loading') showGuestLoading();
     else showAnonymousDenial();
     return;
   }
@@ -9236,6 +9241,8 @@ async function boot() {
     app.rosterCovered = view.rosterCovered || [];
     app.rosterDates = view.rosterDates || [];
     app.rosterError = view.rosterError || '';
+    // v252: con sesión, Jugadores todavía no llegó (el demo no manda el campo: está listo).
+    app.rosterReady = view.rosterReady !== false;
     app.roster = roster || [];
     const pendingRoster = withPendingRoster(app.roster, app.rosterPending, Date.now());
     app.roster = pendingRoster.roster;
