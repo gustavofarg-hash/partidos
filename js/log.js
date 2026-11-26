@@ -5,6 +5,8 @@ import { addDays, capitalize, labelDate, toEpoch, todayISO } from './dates.js';
 import { formatARS, hasPaymentDirection, paymentParts } from './payments.js';
 import { venueLabel } from './venues.js';
 import { canView, isRestricted } from './access.js';
+import { displayName, playersSeenBy } from './roster.js';
+import { rootInviterId } from './guests.js';
 
 export const LOG_LIMIT = 200;
 /** Días hacia atrás, sin contar hoy. El rango es ese día inclusive hasta hoy. */
@@ -115,12 +117,24 @@ export function matchLogFields(match, venues, staff = defaultLogStaff) {
   };
 }
 
-export function playerLogFields(player, mates) {
-  const playerName = clean(player?.name, 80) || 'Sin nombre';
+/**
+ * v254: el nombre como se ve en la lista del partido para quien escribe la línea:
+ * el apodo si hay, si no el Nombre (con el nombre y apodo de su agenda, v249).
+ * roster es la agenda tal como la ve ese organizador (rosterSeenBy). El
+ * «invitado de» es el mismo de la etiqueta de la lista (friendHostName en app.js):
+ * el que lo invitó primero, con el nombre que se ve. No lee nada: usa lo cargado.
+ */
+export function playerLogFields(player, mates, roster = []) {
+  const list = Array.isArray(roster) ? roster : [];
+  const playerName = clean(displayName(player, list) || player?.name, 80) || 'Sin nombre';
   const invitedBy = clean(player?.invitedBy, 80);
   if (!invitedBy) return { playerName, hostName: '' };
-  const host = (mates || []).find((item) => item?.id === invitedBy);
-  const hostName = clean(player?.invitedByName || host?.name, 80);
+  const seen = playersSeenBy((mates || []).filter(Boolean), list);
+  const byId = new Map(seen.filter((item) => item?.id).map((item) => [item.id, item]));
+  if (player?.id && !byId.has(player.id)) byId.set(player.id, player);
+  const rootId = rootInviterId(player, byId);
+  const direct = byId.get(invitedBy);
+  const hostName = clean((rootId && byId.get(rootId)?.name) || direct?.name || player?.invitedByName, 80);
   return { playerName, hostName };
 }
 
@@ -358,7 +372,11 @@ export function logText(entry) {
 }
 
 /** Movimiento de anotarse solo. El actor es el jugador o el organizador que aceptó o rechazó. */
-export function selfMoveEntry(match, venues, player, move = {}) {
+export function selfMoveEntry(match, venues, player, move = {}, seen = null) {
+  // Con rosterId la línea la escribe el jugador desde su link y las reglas
+  // (guestSelfLog) piden el nombre de la ficha: ese no cambia. v254: el resto
+  // (aceptó / rechazó del organizador) lleva el nombre que se ve en la lista.
+  const shown = !move.rosterId && seen ? playerLogFields(player, seen.mates || [], seen.roster || []) : null;
   return partidoEntry(
     { uid: move.actorUid || '', name: move.actorName || player?.name || '' },
     match?.id ? match : { ...(match || {}), id: match?.id || player?.matchId || '' },
@@ -366,7 +384,8 @@ export function selfMoveEntry(match, venues, player, move = {}) {
     {
       type: move.type || '',
       detail: move.detail || '',
-      playerName: player?.name || '',
+      playerName: shown ? shown.playerName : (player?.name || ''),
+      ...(shown?.hostName ? { hostName: shown.hostName } : {}),
       ...(move.rosterId ? { rosterId: String(move.rosterId) } : {}),
       ...(move.guest ? { shareToken: String(move.shareToken || '') } : {}),
     },
@@ -379,7 +398,7 @@ export function partidoEntry(actor, match, venues, extra = {}, staff = defaultLo
   return blankLog({ ...fields, section: 'partidos', ...extra }, actor, staff);
 }
 
-export function pagoEntry(actor, match, venues, player, mates, line, staff = defaultLogStaff) {
+export function pagoEntry(actor, match, venues, player, mates, line, staff = defaultLogStaff, roster = []) {
   const fields = matchLogFields(match || { id: player?.matchId || '' }, venues, staff);
   fields.editors = editorsOf(match, actor?.uid, staff);
   if (!match) fields.matchLabel = 'Sin partido';
@@ -390,7 +409,7 @@ export function pagoEntry(actor, match, venues, player, mates, line, staff = def
     method: line?.method || '',
     amount: line?.amount || 0,
     detail: line?.detail || '',
-    ...playerLogFields(player, mates),
+    ...playerLogFields(player, mates, roster),
   }, actor, staff);
   const fromLine = clean(line?.paidTo, 80);
   const fromPlayer = joinCollectors(collectorNames(player, entry.method));

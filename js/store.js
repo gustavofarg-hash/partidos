@@ -782,6 +782,10 @@ class LocalStore {
   _venuesOf(db) {
     return Object.entries(db?.venues || {}).map(([id, venue]) => ({ id, ...venue }));
   }
+  /** v254: la agenda como la ve quien escribe, para que el Registro diga el nombre de la lista. */
+  _logRoster(db) {
+    return presentRows(Object.entries(db?.roster || {}), db?.contacts?.roster, this.actor?.uid || '').map(({ notes: _notes, ...person }) => rosterSeenBy(person, this.actor));
+  }
   _matesOf(db, matchId) {
     return Object.entries(db.players || {})
       .filter(([, row]) => row.matchId === matchId)
@@ -802,7 +806,7 @@ class LocalStore {
     const match = db.matches[after.matchId] || null;
     const mates = this._matesOf(db, after.matchId);
     const venues = this._venuesOf(db);
-    this._pushLogs(db, lines.map((line) => pagoEntry(this._actor(), match, venues, after, mates, line)));
+    this._pushLogs(db, lines.map((line) => pagoEntry(this._actor(), match, venues, after, mates, line, undefined, this._logRoster(db))));
   }
   syncDay(now = Date.now()) {
     const today = todayISO(new Date(now));
@@ -986,7 +990,7 @@ class LocalStore {
   async logCompensation(match, line) {
     const db = this._load();
     const saved = match?.id && db.matches[match.id] ? { id: match.id, ...db.matches[match.id] } : (match || null);
-    this._pushLogs(db, [pagoEntry(this._actor(), saved, this._venuesOf(db), { name: 'Compensación', matchId: match?.id || '' }, [], line)]);
+    this._pushLogs(db, [pagoEntry(this._actor(), saved, this._venuesOf(db), { name: 'Compensación', matchId: match?.id || '' }, [], line, undefined, this._logRoster(db))]);
     this._save(db);
   }
   async deleteMatch(id) {
@@ -1037,7 +1041,7 @@ class LocalStore {
       ...(rosterId && db.rosterLocks?.[rosterId]?.key ? { linkKey: db.rosterLocks[rosterId].key } : {}),
     };
     db.players[id] = player;
-    const person = playerLogFields({ id, ...player }, [...mates, { id, ...player }]);
+    const person = playerLogFields({ id, ...player }, [...mates, { id, ...player }], this._logRoster(db));
     const savedMatch = db.matches[match.id] || match;
     if (!(selfHold || opts.selfSignup === true)) this._pushLogs(db, [partidoEntry(this._actor(), { id: match.id, ...savedMatch }, this._venuesOf(db), {
       type: 'alta',
@@ -1259,7 +1263,7 @@ class LocalStore {
       detail: 'Rechazó la anotación',
       actorName: this._actor().name,
       actorUid: this._actor().uid,
-    })]);
+    }, { mates: this._matesOf(db, player.matchId), roster: this._logRoster(db) })]);
     this._save(db);
     await this.deletePlayer(playerId, { skipLog: true });
   }
@@ -1416,7 +1420,7 @@ class LocalStore {
     const player = db.players[playerId];
     if (!player || !line?.type) return;
     const match = db.matches[player.matchId] ? { id: player.matchId, ...db.matches[player.matchId] } : { id: player.matchId };
-    this._pushLogs(db, [pagoEntry(this._actor(), match, this._venuesOf(db), { id: playerId, ...player }, this._matesOf(db, player.matchId), line)]);
+    this._pushLogs(db, [pagoEntry(this._actor(), match, this._venuesOf(db), { id: playerId, ...player }, this._matesOf(db, player.matchId), line, undefined, this._logRoster(db))]);
     this._save(db);
   }
   async adjustCredit(input, who) {
@@ -1490,7 +1494,7 @@ class LocalStore {
     const mates = saved ? this._matesOf(db, saved.id) : [];
     this._pushLogs(db, [pagoEntry(this._actor(), saved ? { id: saved.id || match.id, ...saved } : null, this._venuesOf(db), player, mates, {
       type: 'crédito cargado', method: 'credito', amount: money, solo: solo === true,
-    })]);
+    }, undefined, this._logRoster(db))]);
     this._save(db);
   }
   async recordCreditReturn({ player, amount }) {
@@ -1499,7 +1503,7 @@ class LocalStore {
     const db = this._load();
     this._pushLogs(db, [pagoEntry(this._actor(), null, this._venuesOf(db), player, [], {
       type: 'devolución de crédito', method: 'credito', amount: money, solo: true,
-    })]);
+    }, undefined, this._logRoster(db))]);
     this._save(db);
   }
   async setWaitOrders(updates) {
@@ -1522,7 +1526,7 @@ class LocalStore {
     const match = db.matches[row.matchId];
     this._pushLogs(db, [partidoEntry(this._actor(), match ? { id: row.matchId, ...match } : { id: row.matchId }, this._venuesOf(db), {
       type: 'pasó de lista de espera al partido',
-      ...playerLogFields({ id, ...row }, this._matesOf(db, row.matchId)),
+      ...playerLogFields({ id, ...row }, this._matesOf(db, row.matchId), this._logRoster(db)),
       detail: '',
     })]);
     this._save(db);
@@ -1538,7 +1542,7 @@ class LocalStore {
     const match = db.matches[row.matchId];
     this._pushLogs(db, [partidoEntry(this._actor(), match ? { id: row.matchId, ...match } : { id: row.matchId }, this._venuesOf(db), {
       type: 'pasó a lista de espera',
-      ...playerLogFields({ id, ...row }, this._matesOf(db, row.matchId)),
+      ...playerLogFields({ id, ...row }, this._matesOf(db, row.matchId), this._logRoster(db)),
       detail: '',
     })]);
     this._save(db);
@@ -1554,7 +1558,7 @@ class LocalStore {
     const match = db.matches[row.matchId];
     this._pushLogs(db, [partidoEntry(this._actor(), match ? { id: row.matchId, ...match } : { id: row.matchId }, this._venuesOf(db), {
       type: next ? 'no jugó pero pagó' : 'volvió al partido',
-      ...playerLogFields({ id, ...row }, this._matesOf(db, row.matchId)),
+      ...playerLogFields({ id, ...row }, this._matesOf(db, row.matchId), this._logRoster(db)),
       detail: '',
     })]);
     this._save(db);
@@ -1570,7 +1574,7 @@ class LocalStore {
       detail: 'Aceptó la anotación',
       actorName: this._actor().name,
       actorUid: this._actor().uid,
-    })]);
+    }, { mates: this._matesOf(db, player.matchId), roster: this._logRoster(db) })]);
     this._save(db);
   }
   async ensureConfirmToken(id) {
@@ -1605,7 +1609,7 @@ class LocalStore {
         const match = db.matches[player.matchId];
         this._pushLogs(db, [partidoEntry(this._actor(), match ? { id: player.matchId, ...match } : { id: player.matchId }, this._venuesOf(db), {
           type: 'baja',
-          ...playerLogFields({ id, ...player }, mates),
+          ...playerLogFields({ id, ...player }, mates, this._logRoster(db)),
           detail: player.noPlay === true ? 'Sin devolver el crédito' : (player.waiting === true ? 'En la lista de espera' : ''),
         })]);
       }
@@ -1897,7 +1901,7 @@ class LocalStore {
     }
     const entry = { ...parsed.entry, rosterId: id, createdAt: at };
     db.behavior[docId] = entry;
-    this._pushLogs(db, [behaviorLog(this._actor(), { id, name: cur.name || '' }, { ...entry, matchLabel: input?.matchLabel })]);
+    this._pushLogs(db, [behaviorLog(this._actor(), this._logRoster(db).find((row) => row.id === id) || { id, name: cur.name || '' }, { ...entry, matchLabel: input?.matchLabel })]);
     this._save(db);
     return docId;
   }
@@ -1911,8 +1915,8 @@ class LocalStore {
       throw Object.assign(new Error('No podés borrar esta entrada.'), { code: 'permission-denied' });
     }
     delete db.behavior[docId];
-    const person = db.roster?.[row.rosterId];
-    this._pushLogs(db, [behaviorDeleteLog(this._actor(), { name: person?.name || '' }, row)]);
+    const person = this._logRoster(db).find((item) => item.id === row.rosterId);
+    this._pushLogs(db, [behaviorDeleteLog(this._actor(), person || { name: '' }, row)]);
     this._save(db);
   }
   async deleteRoster(id) {
@@ -3244,6 +3248,10 @@ export class FirebaseStore {
     });
     this._swap('log', un);
   }
+  /** v254: la agenda cargada (ya con el nombre y apodo de este organizador). No lee nada. */
+  _logRoster() {
+    return Array.isArray(this.state.roster) ? this.state.roster : [];
+  }
   _noteSnap(snap) {
     const meta = snap?.metadata;
     if (!meta) return;
@@ -4324,7 +4332,7 @@ export class FirebaseStore {
     await this._writeConfirmation(token, ref.id, player, match);
     if (!(selfHold || opts.selfSignup === true)) await this._appendLogs([partidoEntry(this._actor(), stored, this.state.venues, {
       type: 'alta',
-      ...playerLogFields({ id: ref.id, ...player }, [...mates, { id: ref.id, ...player }]),
+      ...playerLogFields({ id: ref.id, ...player }, [...mates, { id: ref.id, ...player }], this._logRoster()),
       detail: opts.noPlay === true ? 'No jugó pero pagó' : selfSignupDetail(player, waiting),
     })]);
     return ref.id;
@@ -4744,7 +4752,7 @@ export class FirebaseStore {
       detail: 'Rechazó la anotación',
       actorName: this._actor().name,
       actorUid: this._actor().uid,
-    })]);
+    }, { mates: this.state.players.filter((row) => row.matchId === player.matchId), roster: this._logRoster() })]);
     await this.deletePlayer(playerId, { skipLog: true });
   }
   async setTeams(id, teams, who) {
@@ -4959,7 +4967,7 @@ export class FirebaseStore {
     if (!lines.length) return;
     const match = this.state.matches.find((item) => item.id === before.matchId) || null;
     const mates = this.state.players.filter((item) => item.matchId === before.matchId);
-    await this._appendLogs(lines.map((line) => pagoEntry(this._actor(), match, this.state.venues, after, mates, line)));
+    await this._appendLogs(lines.map((line) => pagoEntry(this._actor(), match, this.state.venues, after, mates, line, undefined, this._logRoster())));
   }
   async savePayBatch(batch) {
     const uid = String(this.actor?.uid || '').trim();
@@ -4984,7 +4992,7 @@ export class FirebaseStore {
     if (!player || !line?.type) return;
     const match = this.state.matches.find((item) => item.id === player.matchId) || { id: player.matchId };
     const mates = this.state.players.filter((item) => item.matchId === player.matchId);
-    await this._appendLogs([pagoEntry(this._actor(), match, this.state.venues, player, mates, line)]);
+    await this._appendLogs([pagoEntry(this._actor(), match, this.state.venues, player, mates, line, undefined, this._logRoster())]);
   }
   async adjustCredit(input, who) {
     const id = creditDocId(input?.personKey, input?.organizerUid);
@@ -5067,7 +5075,7 @@ export class FirebaseStore {
     if (!lines.length) return;
     const match = this.state.matches.find((item) => item.id === player.matchId) || null;
     const mates = this.state.players.filter((item) => item.matchId === player.matchId);
-    await this._appendLogs(lines.map((line) => pagoEntry(this._actor(), match, this.state.venues, after, mates, line)));
+    await this._appendLogs(lines.map((line) => pagoEntry(this._actor(), match, this.state.venues, after, mates, line, undefined, this._logRoster())));
   }
   async recordCreditLoad({ match, player, amount, solo }) {
     const money = Math.round(Number(amount) * 100) / 100;
@@ -5076,14 +5084,14 @@ export class FirebaseStore {
     const mates = saved ? this.state.players.filter((item) => item.matchId === saved.id) : [];
     await this._appendLogs([pagoEntry(this._actor(), saved, this.state.venues, player, mates, {
       type: 'crédito cargado', method: 'credito', amount: money, solo: solo === true,
-    })]);
+    }, undefined, this._logRoster())]);
   }
   async recordCreditReturn({ player, amount }) {
     const money = Math.round(Number(amount) * 100) / 100;
     if (!(money > 0)) return;
     await this._appendLogs([pagoEntry(this._actor(), null, this.state.venues, player, [], {
       type: 'devolución de crédito', method: 'credito', amount: money, solo: true,
-    })]);
+    }, undefined, this._logRoster())]);
   }
   // Solo los campos del pago (y updatedAt): así entra por la regla corta de
   // pagos en firestore.rules. La regla general de players, con un invitado,
@@ -5108,7 +5116,7 @@ export class FirebaseStore {
     const mates = this.state.players.filter((item) => item.matchId === cur.matchId);
     await this._appendLogs([partidoEntry(this._actor(), match, this.state.venues, {
       type: 'pasó de lista de espera al partido',
-      ...playerLogFields({ ...cur, waiting: false }, mates),
+      ...playerLogFields({ ...cur, waiting: false }, mates, this._logRoster()),
       detail: '',
     })]);
   }
@@ -5121,7 +5129,7 @@ export class FirebaseStore {
     const mates = this.state.players.filter((item) => item.matchId === cur.matchId);
     await this._appendLogs([partidoEntry(this._actor(), match, this.state.venues, {
       type: 'pasó a lista de espera',
-      ...playerLogFields({ ...cur, waiting: true }, mates),
+      ...playerLogFields({ ...cur, waiting: true }, mates, this._logRoster()),
       detail: '',
     })]);
   }
@@ -5134,7 +5142,7 @@ export class FirebaseStore {
     const mates = this.state.players.filter((item) => item.matchId === cur.matchId);
     await this._appendLogs([partidoEntry(this._actor(), match, this.state.venues, {
       type: next ? 'no jugó pero pagó' : 'volvió al partido',
-      ...playerLogFields({ ...cur, noPlay: next }, mates),
+      ...playerLogFields({ ...cur, noPlay: next }, mates, this._logRoster()),
       detail: '',
     })]);
   }
@@ -5148,7 +5156,7 @@ export class FirebaseStore {
       detail: 'Aceptó la anotación',
       actorName: this._actor().name,
       actorUid: this._actor().uid,
-    })]);
+    }, { mates: this.state.players.filter((row) => row.matchId === player.matchId), roster: this._logRoster() })]);
   }
   async ensureConfirmToken(id) {
     const p = this.state.players.find((x) => x.id === id);
@@ -5174,7 +5182,7 @@ export class FirebaseStore {
       const mates = this.state.players.filter((item) => item.matchId === player.matchId);
       await this._appendLogs([partidoEntry(this._actor(), match, this.state.venues, {
         type: 'baja',
-        ...playerLogFields(player, mates),
+        ...playerLogFields(player, mates, this._logRoster()),
         detail: player.noPlay === true ? 'Sin devolver el crédito' : (player.waiting === true ? 'En la lista de espera' : ''),
       })]);
     }
@@ -5696,7 +5704,7 @@ export class FirebaseStore {
     const person = (this.state.roster || []).find((item) => item.id === row.rosterId);
     const { doc, deleteDoc } = this.fs;
     await deleteDoc(doc(this.db, 'behavior', docId));
-    await this._appendLogs([behaviorDeleteLog(this._actor(), { name: person?.name || '' }, row)]);
+    await this._appendLogs([behaviorDeleteLog(this._actor(), person || { name: '' }, row)]);
   }
   async deleteRoster(id) {
     const cur = (this.state.roster || []).find((row) => row.id === id);

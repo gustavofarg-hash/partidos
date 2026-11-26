@@ -4,6 +4,12 @@
 // se muestran acá aunque sigan guardados en su colección.
 import { todayISO, numericDate, toEpoch, clockTime, labelDate, capitalize, TZ } from './dates.js';
 import { blankLog } from './log.js';
+import { cleanShortName } from './roster.js';
+
+/** v254: como se ve en la lista: el apodo de la ficha (para quien escribe) o el nombre. */
+function shownPersonName(person) {
+  return cleanShortName(person?.shortName) || String(person?.name || '');
+}
 
 export const BEHAVIOR_TYPES = Object.freeze(['manual', 'falta', 'baja', 'suspension', 'lift']);
 export const BEHAVIOR_BASE = 10;
@@ -203,7 +209,7 @@ export function behaviorLog(actor, person, entry) {
     type: LOG_TYPES[entry?.type] || 'ajuste de comportamiento',
     matchId: String(entry?.matchId || ''),
     matchLabel: matchLabel || 'Comportamiento',
-    playerName: person?.name || '',
+    playerName: shownPersonName(person),
     detail,
     editors: ['*'],
   }, actor);
@@ -216,7 +222,7 @@ export function behaviorDeleteLog(actor, person, entry) {
     type: 'entrada borrada',
     matchId: String(entry?.matchId || ''),
     matchLabel: 'Comportamiento',
-    playerName: person?.name || '',
+    playerName: shownPersonName(person),
     detail,
     editors: ['*'],
   }, actor);
