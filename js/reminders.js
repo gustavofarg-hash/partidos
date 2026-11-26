@@ -381,7 +381,9 @@ export function cancelLinks({ match, players, venue, choice, android, roster } =
 }
 
 /**
- * Lista para mandar o para un script externo. Cada ítem: { name, waUrl, confirmUrl }.
+ * Lista para mandar o para un script externo. Cada ítem: { name, waUrl, confirmUrl, alsoIds }.
+ * alsoIds (v258): las filas de la misma persona en otros partidos del día donde juega.
+ * allPlayers tiene que traer las filas como están guardadas (sin el WhatsApp de la ficha).
  * Omite a quien no tenga teléfono o confirmToken: el token tiene que estar ya
  * guardado en el jugador (se crea al anotarlo).
  */
@@ -397,9 +399,16 @@ export function reminderLinks({ match, players, venue, origin, choice, android, 
     if (!phone || !token || !p.id) continue;
     // v235: el link completo, sin link corto.
     const confirmUrl = confirmPageUrl({ matchId: match.id, playerId: p.id, token, origin });
-    const slots = upcomingConfirmSlots({ players: pool, matches: calendar, player: p, now });
+    // v258: los otros horarios del día salen de la fila guardada (la de allPlayers), no de la
+    // copia con el WhatsApp de la ficha: con ese número la persona dejaba de coincidir con su
+    // fila del otro partido (anotada por Autoservicio, sin huella) y quedaba un solo horario.
+    const stored = (pool || []).find((row) => row?.id === p.id);
+    const who = stored ? { ...stored, confirmToken: token, waiting: p.waiting } : p;
+    const slots = upcomingConfirmSlots({ players: pool, matches: calendar, player: who, now });
     const text = reminderMessage({ player: p, match, confirmUrl, roster, now, slots });
-    out.push({ id: p.id, name: p.name, phone, text, waUrl: waSendUrl({ phone, text, choice, android }), confirmUrl });
+    // v258: las otras filas del día donde juega: también quedan «Enviado».
+    const alsoIds = slots.map((slot) => slot.playerId).filter((id) => id && id !== p.id);
+    out.push({ id: p.id, name: p.name, phone, text, waUrl: waSendUrl({ phone, text, choice, android }), confirmUrl, alsoIds });
   }
   return out;
 }

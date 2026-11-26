@@ -1049,6 +1049,14 @@ service cloud.firestore {
           && awaitingForMe()
           && phoneGone(request.resource.data)
           && validMoney(request.resource.data);
+      // v258: el recordatorio mandado desde un partido marca «Enviado» también en la fila
+      // de la misma persona en otro partido del día, aunque ese partido sea de otro
+      // organizador. Solo esa marca (y updatedAt), en una fila que el organizador ve.
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reminderSentAt', 'updatedAt'])
+          && isActiveStaff()
+          && canReadListed(resource.data)
+          && request.resource.data.reminderSentAt is number
+          && request.resource.data.updatedAt is number;
       allow update: if isActiveStaff() && validPlayerUpdate() && invitedByOk() && confirmationWriteOk()
           && phoneGuardMoved(playerId)
           && playerStampSame()
