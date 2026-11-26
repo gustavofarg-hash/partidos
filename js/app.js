@@ -47,13 +47,14 @@ import { bindTap, tapChose } from './tap.js';
 import { SHORTCUT_DOUBLE_MS, shortcutHash, shortcutMatch } from './shortcut.js';
 import { mergeById, monthIsReady, shiftMonth, statsRangesFor, yearMonths } from './stats-range.js';
 import { DB_GENERIC, adminOnlyDetail, connectionBack, storeErrorNotice, writeFailureFor } from './db-notice.js';
+import { saveStep, saveStepText, withSaveStep } from './save-step.js';
 import { BACKUP_COLLECTIONS, BACKUP_LOADED_OK, COLLECTION_LABELS, backupFilename, backupProgressText, backupSurfaceMessage, clearTrialResume, parseBackup, readTrialResume, resetProgressText, trialBackupResultText, trialResumeId, writeTrialResume } from './backup.js';
 import {
   DEFAULT_VENUE_ID, DEFAULT_VENUE_NAME, VENUES_DENIED_WRITE, capacityFor, cleanCourt, courtLabel, courtMark, defaultVenueId, filterHistoryByVenues, footballLabel, footballPhrase, historyVenueOptions, isVenueDenied, matchCapacity, matchVenueId, perTeamOf, perTeamOptions, venueChoices, venueLabel,
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v255';
+const APP_VERSION = 'f7c-v256';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -278,11 +279,14 @@ function waHref(phone, text) {
 
 /* ───────── toast ───────── */
 let toastTimer;
-function toast(msg, ms = 2600) {
+// v256: el aviso largo del admin (paso y documento) dura más; se cierra tocándolo.
+const SAVE_STEP_TOAST_MS = 12000;
+function toast(msg, ms = 2600, { detail = false } = {}) {
   const t = $('#toast');
   t.textContent = msg;
   t.hidden = false;
   t.classList.toggle('ok', msg === BACKUP_LOADED_OK);
+  t.classList.toggle('detail', detail === true);
   clearTimeout(toastTimer);
   toastTimer = 0;
   if (ms > 0) toastTimer = setTimeout(() => { t.hidden = true; t.classList.remove('ok'); }, ms);
@@ -343,10 +347,13 @@ function run(p, okMsg, deniedMsg) {
     return value;
   }).catch((e) => {
     console.error(e?.code || 'sin-codigo', e);
+    // v256: qué paso falló y en qué documento. En la consola para todos; en el aviso, solo el admin.
+    if (saveStepText(e)) console.error('Guardado: falló ' + saveStepText(e));
     if (e?.code === 'already-in-match') toast(e.message || ALREADY_IN_MATCH);
     else if (e?.code === 'suspended') askNotice(e.message || SUSPENDED_TEXT);
     else if (e?.paymentWrite) toast(paymentFailureText(e, e.playerId), 4500);
     else if (deniedMsg && isPermissionDenied(e)) toast(deniedMsg);
+    else if (isAdminUser() && saveStepText(e)) toast(withSaveStep(writeFailureFor(writeFailureText(e), true), e), SAVE_STEP_TOAST_MS, { detail: true });
     else toast(writeFailureFor(writeFailureText(e), isAdminUser()), 4500);
   });
 }
@@ -468,9 +475,9 @@ async function releaseAutoCreditExcess(playerId) {
   if (!org?.uid || !key) return 0;
   const nextCredit = roundMoney(prev.credit - excess);
   const move = { personKey: key, organizerUid: org.uid, organizerName: org.name, name: player.name, delta: excess };
-  await app.store.adjustCredit(move, app.who);
+  await saveStep('', 'credits', () => app.store.adjustCredit(move, app.who));
   try {
-    await app.store.setPayment(player.id, {
+    await saveStep('', `players/${player.id}`, () => app.store.setPayment(player.id, {
       paid: true,
       split: true,
       freePlay: false,
@@ -484,7 +491,7 @@ async function releaseAutoCreditExcess(playerId) {
       creditTo: nextCredit > 0 ? org.name : null,
       autoCredit: nextCredit > 0,
       transferParts: player.transferParts || null,
-    }, app.who);
+    }, app.who));
   } catch (error) {
     await app.store.adjustCredit({ ...move, delta: -excess }, app.who);
     throw error;
@@ -506,9 +513,9 @@ async function chargeAutoCredit(playerId, cap) {
   if (!(take.pay > 0)) return 0;
   const prev = paymentParts(player);
   const move = { personKey: key, organizerUid: org.uid, organizerName: org.name, name: player.name, delta: -take.pay };
-  await app.store.adjustCredit(move, app.who);
+  await saveStep('', 'credits', () => app.store.adjustCredit(move, app.who));
   try {
-    await app.store.setPayment(player.id, {
+    await saveStep('', `players/${player.id}`, () => app.store.setPayment(player.id, {
       paid: true,
       split: true,
       freePlay: false,
@@ -522,7 +529,7 @@ async function chargeAutoCredit(playerId, cap) {
       creditTo: org.name,
       autoCredit: true,
       transferParts: player.transferParts || null,
-    }, app.who);
+    }, app.who));
   } catch (error) {
     await app.store.adjustCredit({ ...move, delta: take.pay }, app.who);
     throw error;
@@ -5860,7 +5867,8 @@ async function addSignedPlayer(m, host, asWait, tentative, friendRows = [], opts
     let hostName = host?.name || '';
     let offset = 0;
     if (!host?.id) {
-      const id = await linkedRosterId({ name: host.name, phone: host.phone, rosterId: host.rosterId, phoneKey: host.phoneKey, phoneShared: share && !known, strictName: !host.rosterId });
+      const hostStep = `al anotar a ${host.name}`;
+      const id = await saveStep(hostStep, '', () => saveStep('al guardar en Jugadores', 'roster', () => linkedRosterId({ name: host.name, phone: host.phone, rosterId: host.rosterId, phoneKey: host.phoneKey, phoneShared: share && !known, strictName: !host.rosterId })));
       let saved = id ? app.roster.find((person) => person.id === id) : null;
       if (saved && foldText(saved.name) !== foldText(host.name)) saved = null;
       if (share && saved && saved.phoneShared !== true && saved.phoneOwnerUid === actor().uid) {
@@ -5869,7 +5877,7 @@ async function addSignedPlayer(m, host, asWait, tentative, friendRows = [], opts
       }
       const visible = share || saved?.phoneShared === true;
       const waiting = offset >= place.main;
-      hostId = await app.store.addPlayer(m, {
+      hostId = await saveStep(hostStep, '', () => app.store.addPlayer(m, {
         name: host.name,
         shortName: saved?.shortName || '',
         phone: host.phone || '',
@@ -5878,15 +5886,16 @@ async function addSignedPlayer(m, host, asWait, tentative, friendRows = [], opts
         hasPhone: host.hasPhone === true || saved?.hasPhone === true,
         phoneShared: visible,
         ...signup,
-      }, app.who, { waiting, tentative: tentative === true && !waiting });
-      if (!waiting) await applyAutoCredit(hostId);
+      }, app.who, { waiting, tentative: tentative === true && !waiting }));
+      if (!waiting) await saveStep(hostStep, '', () => saveStep('al descontar saldo', '', () => applyAutoCredit(hostId)));
       hostName = host.name;
       offset = 1;
       if (opts.reveal === true) app.revealPlayerId = hostId;
     }
-    for (const friend of friends) {
+    for (const [index, friend] of friends.entries()) {
       const waiting = offset >= place.main;
-      const friendId = await app.store.addPlayer(m, {
+      const guestStep = `con el invitado ${index + 1}`;
+      const friendId = await saveStep(guestStep, '', () => app.store.addPlayer(m, {
         ...signup,
         name: friend.name,
         shortName: friend.shortName || '',
@@ -5898,12 +5907,12 @@ async function addSignedPlayer(m, host, asWait, tentative, friendRows = [], opts
         invitedBy: hostId,
         invitedByName: hostName,
         guestAuto: friend.guestAuto === true,
-      }, app.who, { waiting });
-      if (!waiting) await applyAutoCredit(friendId);
+      }, app.who, { waiting }));
+      if (!waiting) await saveStep(guestStep, '', () => saveStep('al descontar saldo', '', () => applyAutoCredit(friendId)));
       offset += 1;
     }
     if (also.length) {
-      const notes = await addGuestsToSameDay(also, friends, signup, m);
+      const notes = await saveStep('al sumar los invitados a sus otros partidos del día', '', () => addGuestsToSameDay(also, friends, signup, m));
       if (notes.length) toast(notes.join(' · '), 4500);
     }
     if (opts.reveal === true && app.revealPlayerId) {
