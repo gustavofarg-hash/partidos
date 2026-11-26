@@ -61,6 +61,17 @@ export function isRosterDenied(error) {
   return error?.code === 'permission-denied';
 }
 
+/**
+ * v255: «Invitado 2 (Nico M.)» es el mismo invitado que «Invitado 2» del mismo
+ * anfitrión: para la promo, el renombre y el saldo no cuenta lo de «(…)».
+ * Solo en un nombre automático (Invitado N / Amigo N). Sin «(…)», queda como antes.
+ */
+export function guestIdentityName(name) {
+  const folded = foldText(name);
+  const match = folded.replace(/\s+/g, ' ').trim().match(/^((?:amigo|invitado) \d+) \(.*\)$/);
+  return match ? match[1] : folded;
+}
+
 export function foldText(value) {
   return String(value || '')
     .normalize('NFD')
@@ -495,7 +506,7 @@ export function personKey(player, players, depth = 0) {
   if (rosterId) return `r:${rosterId}`;
   const name = foldText(player?.name);
   if (!name) return '';
-  if (isNamedGuest(player)) return `g:${guestHostKey(player, players, depth)}|${name}`;
+  if (isNamedGuest(player)) return `g:${guestHostKey(player, players, depth)}|${guestIdentityName(player?.name)}`;
   return `n:${name}`;
 }
 

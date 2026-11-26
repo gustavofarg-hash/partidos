@@ -20,7 +20,7 @@ import { playerMoreItems, playerShareTarget } from './player-more.js';
 import { LINK_INVALID_TEXT, canResetLink, linkResetQuestion } from './link-reset.js';
 import { activityNoticeText, activityNotices } from './notify.js';
 import { ROSTER_DENIED_WRITE, SUSPENDED_TEXT, activeSuspensions, blockingSuspensions, canonicalPhone, capitalizeWords, cleanShortName, displayName, foldText, fullNameBehind, givenName, nickOf, isRosterDenied, personKey, playersSeenBy, rosterSeenBy, phoneIdentity, playerMatchesPerson, rosterByIdentity, rosterByPhone, rosterForOrganizer, rosterHeldBy, rosterIdForSuspension, searchRoster, suspensionHistoryOf, visibleRosterHits, visibleRosterPhone, withPendingRoster } from './roster.js';
-import { ALREADY_IN_MATCH, alreadyInMatch, attachRosterGuest, duplicateText, isDuplicateText, firstDuplicate, groupByInviter, inviteBlock, isAutoGuestName, isGuest, normName, placeGroup, resolveFriendNames, rootInviterId, sameDayPromoGuestRenames, waitWarning } from './guests.js';
+import { ALREADY_IN_MATCH, alreadyInMatch, attachRosterGuest, duplicateText, isDuplicateText, firstDuplicate, groupByInviter, inviteBlock, isAutoGuestName, isGuest, normName, placeGroup, resolveFriendNames, rootInviterId, sameDayPromoGuestRenames, sameGuestName, waitWarning } from './guests.js';
 import { MAX_NOTES, MAX_NOTE_TEXT, POSITIONS, currentMatches, filterLevelTyping, formatLevel, keptSignupIds, levelCaretAfterStep, levelStepSide, matchAlreadyPlayed, matchSignupState, noteWhen, parseLevel, pastMatches, playerLinkView, playerRecord, playerStats, rosterDeleteReasons, sortedNotes, splitNear, stepLevel, storedLevel, upcomingMatches } from './profile.js';
 import { organizerChoices, organizerTagClass, sameOrganizer, sameOrganizerIdentity } from './organizers.js';
 import { EDIT_LOCK_TEXT, canEditPlayer, canEditRoster, canEditRosterNick, canWritePlayer } from './edit-lock.js';
@@ -53,7 +53,7 @@ import {
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v254';
+const APP_VERSION = 'f7c-v255';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -5745,10 +5745,21 @@ function bindGuestSuggest(field, hits, match) {
   });
 }
 
-function bindGuestQty({ min = 0, value = 0, taken = [], match = null } = {}) {
+function bindGuestQty({ min = 0, value = 0, taken = [], match = null, hostLabel = () => '' } = {}) {
   const input = $('#friend-count');
   const rows = $('#friend-rows');
-  if (!input || !rows) return;
+  if (!input || !rows) return { refreshHint: () => {} };
+  // v255: «Si dejás el nombre vacío: Invitado 1 (Nico M.), …» con el que invita.
+  const refreshHint = () => {
+    const count = rows.querySelectorAll('input.friend-name').length;
+    const names = resolveFriendNames(Array.from({ length: count }, () => ''), taken, hostLabel());
+    const hint = $('#friend-hint');
+    if (hint) {
+      hint.textContent = names.length
+        ? `Si dejás el nombre vacío: ${names.map((item) => item.name).join(', ')}. Si ya está en Jugadores, elegilo de la lista.`
+        : 'Sin invitados entra solo él.';
+    }
+  };
   const clamp = (n) => Math.min(20, Math.max(min, Number.isFinite(n) ? n : min));
   const paint = (n, focus) => {
     const count = clamp(Math.floor(Number(n) || 0));
@@ -5768,19 +5779,14 @@ function bindGuestQty({ min = 0, value = 0, taken = [], match = null } = {}) {
       if (kept[i]?.rosterId) field.dataset.rosterId = kept[i].rosterId;
       bindGuestSuggest(field, row.querySelector('.friend-hits'), match);
     }
-    const names = resolveFriendNames(Array.from({ length: count }, () => ''), taken);
-    const hint = $('#friend-hint');
-    if (hint) {
-      hint.textContent = names.length
-        ? `Si dejás el nombre vacío: ${names.map((item) => item.name).join(', ')}. Si ya está en Jugadores, elegilo de la lista.`
-        : 'Sin invitados entra solo él.';
-    }
+    refreshHint();
     if (focus) rows.querySelector('input')?.focus();
   };
   paint(value, false);
   $('#friend-plus').onclick = () => paint(Number(input.value) + 1, true);
   $('#friend-minus').onclick = () => paint(Number(input.value) - 1, false);
   input.addEventListener('change', () => paint(parseInt(input.value, 10), false));
+  return { refreshHint };
 }
 
 function friendNamesOf(matchId, hostId) {
@@ -5807,7 +5813,9 @@ async function addSignedPlayer(m, host, asWait, tentative, friendRows = [], opts
   const guestBlock = host?.id ? inviteBlock(matesOf(m.id), host.id) : '';
   if (guestBlock) { toast(guestBlock); return false; }
   const taken = host?.id ? friendNamesOf(m.id, host.id) : [];
-  const friends = (resolved || guestsFromRows(friendRows, taken)).map((friend) => ({
+  // v255: entre paréntesis, cómo ve al que invita quien los anota (apodo o Nombre).
+  const hostLabel = opts.hostLabel ?? (host?.id ? shownName(host) : String(host?.name || ''));
+  const friends = (resolved || guestsFromRows(friendRows, taken, hostLabel)).map((friend) => ({
     name: friend.name,
     guestAuto: friend.guestAuto === true,
     invitedBy: host?.id || (friend.guestAuto ? 'nuevo' : ''),
@@ -5944,8 +5952,9 @@ async function addGuestsToSameDay(targets, friends, signup, source) {
     const label = `${match.time || '--:--'} hs`;
     const blocked = addBlock(match) || inviteBlock(matesOf(match.id), host.id);
     if (blocked) { notes.push(`${label}: ${blocked}`); continue; }
-    const there = new Set(friendNamesOf(match.id, host.id).map((name) => normName(name)));
-    const fresh = friends.filter((friend) => !there.has(normName(friend.name)));
+    // v255: «Invitado 1» ya anotado ahí es el mismo que «Invitado 1 (Nico M.)».
+    const there = friendNamesOf(match.id, host.id);
+    const fresh = friends.filter((friend) => !there.some((name) => normName(name) === normName(friend.name) || (friend.guestAuto === true && sameGuestName(name, friend.name))));
     const todo = fresh.filter((friend) => !firstDuplicate(matesOf(match.id), [{ name: friend.name, phone: friend.phone || '', rosterId: friend.rosterId || '', phoneKey: friend.phoneKey || '', hasPhone: friend.hasPhone === true, guestAuto: friend.guestAuto === true }]));
     const clash = fresh.filter((friend) => !todo.includes(friend)).map((friend) => friend.name);
     if (clash.length) notes.push(`${label}: ${clash.join(', ')} ya figura${clash.length > 1 ? 'n' : ''} en ese partido`);
@@ -6105,7 +6114,7 @@ function openPlayerForm(m, p, opts = {}) {
       ${p ? '' : `<div class="friend-box" id="friend-box">
         ${guestQtyHtml(0)}
         <div id="friend-rows"></div>
-        <p class="hint" id="friend-hint">Si dejás el nombre vacío, queda como Invitado 1, Invitado 2…</p>
+        <p class="hint" id="friend-hint">Si dejás el nombre vacío, queda como Invitado 1 (su apodo o nombre), Invitado 2…</p>
       </div>`}
       <div class="field"><div class="err" id="pf-err"></div></div>
       </div>
@@ -6149,6 +6158,14 @@ function openPlayerForm(m, p, opts = {}) {
   });
   const find = $('#roster-find');
   let pickedId = '';
+  let refreshGuestHint = () => {};
+  // v255: el jugador nuevo con invitados: el apodo de la ficha elegida, si no el Nombre escrito.
+  const newHostLabel = () => {
+    const typed = String(form.name?.value || '').trim();
+    const person = pickedId ? app.roster.find((r) => r.id === pickedId) : null;
+    if (person && foldText(person.name) === foldText(typed)) return cleanShortName(person.shortName) || typed;
+    return typed;
+  };
   let collapseHits = false;
   let queryAtPick = '';
   if (find) {
@@ -6174,6 +6191,7 @@ function openPlayerForm(m, p, opts = {}) {
       collapseHits = true;
       queryAtPick = find.value.trim();
       form.dataset.rosterPick = person.id;
+      setTimeout(() => refreshGuestHint(), 0);
       form.name.value = person.name;
       pickedPhone = '';
       if (form.phone && person.phone && !phoneHidden(person)) {
@@ -6197,6 +6215,7 @@ function openPlayerForm(m, p, opts = {}) {
       paint();
     });
     form.name.addEventListener('input', () => {
+      refreshGuestHint();
       const person = pickedId ? app.roster.find((r) => r.id === pickedId) : null;
       if (person && foldText(person.name) !== foldText(form.name.value)) {
         if (form.phone && pickedPhone && form.phone.value.trim() === pickedPhone) {
@@ -6301,7 +6320,7 @@ function openPlayerForm(m, p, opts = {}) {
       find.focus();
     }, 50);
   }
-  if ($('#friend-count')) bindGuestQty({ min: 0, value: 0, taken: [], match: m });
+  if ($('#friend-count')) refreshGuestHint = bindGuestQty({ min: 0, value: 0, taken: [], match: m, hostLabel: newHostLabel }).refreshHint;
   form.onsubmit = async (e) => {
     e.preventDefault();
     if (form.dataset.mode !== 'edit' || !p || form.dataset.editId !== p.id) p = null;
@@ -6411,7 +6430,8 @@ function openPlayerForm(m, p, opts = {}) {
           phoneShared: $('#wa-share')?.checked === true,
         }
       : { name, phone, phoneShared: $('#wa-share')?.checked === true };
-    const result = await addSignedPlayer(m, host, asWait, !!$('#player-tentative')?.checked, friendRowValues(), { reveal: true });
+    const hostLabel = usePick ? (cleanShortName(person.shortName) || person.name) : name;
+    const result = await addSignedPlayer(m, host, asWait, !!$('#player-tentative')?.checked, friendRowValues(), { reveal: true, hostLabel });
     if (isDuplicateText(result) || result === SUSPENDED_TEXT) $('#pf-err').textContent = result;
   };
 }
@@ -6424,10 +6444,10 @@ function friendRowValues() {
 }
 
 /** El texto escrito, y la ficha de Jugadores solo si sigue siendo ese nombre. */
-function guestsFromRows(rows, taken) {
+function guestsFromRows(rows, taken, hostLabel = '') {
   const list = rows || [];
   const texts = list.map((row) => (typeof row === 'string' ? row : row?.text || ''));
-  return resolveFriendNames(texts, taken).map((friend, index) => {
+  return resolveFriendNames(texts, taken, hostLabel).map((friend, index) => {
     const rosterId = typeof list[index] === 'object' ? String(list[index]?.rosterId || '') : '';
     const person = rosterId ? (app.roster || []).find((item) => item.id === rosterId) : null;
     return attachRosterGuest(friend, person);
@@ -8969,7 +8989,8 @@ function openFriendForm(m, host) {
   if (guestBlock) { toast(guestBlock); return; }
   const blocked = addBlock(m);
   if (blocked) { toast(blocked); return; }
-  const next = resolveFriendNames([''], friendNamesOf(m.id, host.id))[0]?.name || 'Invitado 1';
+  const hostLabel = shownName(host);
+  const next = resolveFriendNames([''], friendNamesOf(m.id, host.id), hostLabel)[0]?.name || 'Invitado 1';
   const sameDay = sameDayHostMatches(m, host);
   openSheet(`
     <form id="friend-form" novalidate>
@@ -8990,7 +9011,7 @@ function openFriendForm(m, host) {
       <div class="sheet-actions"><button type="button" class="btn" data-close>Cancelar</button><button class="btn primary" type="submit">Agregar</button></div>
     </form>`);
   const form = $('#friend-form');
-  bindGuestQty({ min: 1, value: 1, taken: friendNamesOf(m.id, host.id), match: m });
+  bindGuestQty({ min: 1, value: 1, taken: friendNamesOf(m.id, host.id), match: m, hostLabel: () => hostLabel });
   form.onsubmit = async (e) => {
     e.preventDefault();
     const rows = friendRowValues();
@@ -8998,8 +9019,8 @@ function openFriendForm(m, host) {
     const picked = new Set([...form.querySelectorAll('input[name=also]:checked')].map((input) => input.value));
     const also = sameDay.filter((row) => !row.blocked && picked.has(row.match.id));
     // Los nombres salen de este partido; en los otros van los mismos (mismo anfitrión + nombre = misma persona).
-    const resolved = guestsFromRows(rows, friendNamesOf(m.id, host.id));
-    const result = await addSignedPlayer(m, host, host.waiting === true, false, rows, { resolved, also, reveal: true });
+    const resolved = guestsFromRows(rows, friendNamesOf(m.id, host.id), hostLabel);
+    const result = await addSignedPlayer(m, host, host.waiting === true, false, rows, { resolved, also, reveal: true, hostLabel });
     if (isDuplicateText(result) || result === SUSPENDED_TEXT) $('#friend-err').textContent = result;
   };
 }

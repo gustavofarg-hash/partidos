@@ -147,7 +147,7 @@ const settingsText = await page.locator('#sheet').innerText();
 check('Ajustes no ofrece Business ni Dual Messenger', !/Desde qué WhatsApp|Dual Messenger|WhatsApp Business|Que el celular pregunte/.test(settingsText), settingsText.replace(/\s+/g, ' ').slice(0, 180));
 check('El admin ve hacer backup', await page.isVisible('#set-backup') && await page.isVisible('#set-restore') && await page.isVisible('#set-reset-db'));
 check('El admin ve el medidor de Firebase', (await page.locator('#usage-line').innerText()).includes('Hoy (se renueva a las 05:00)') && (await page.locator('#usage-line').innerText()).includes('lecturas de 50.000') && (await page.locator('#usage-meter').innerText()).includes('Estimación'));
-check('Ajustes muestra la versión que corre', (await page.locator('#app-version').innerText()) === 'Versión f7c-v254');
+check('Ajustes muestra la versión que corre', (await page.locator('#app-version').innerText()) === 'Versión f7c-v255');
 check('En la raíz no aparece el cartel de prueba', (await page.locator('html').getAttribute('class') || '').includes('trial') === false && await page.locator('#trial-banner').isHidden());
 check('Ajustes no repite el nombre de la app al pie', !(await page.locator('#sheet').innerText()).includes('Mis Partidos ·'));
 check('Borra la elección vieja de WhatsApp', await page.evaluate(() => localStorage.getItem('f7c-wa-from') == null));
@@ -3178,8 +3178,8 @@ await page.locator('#friend-rows input').nth(1).fill('Pedro Tipo');
 await page.click('#player-form button[type=submit]');
 await page.waitForSelector('#slots .name:text-is("Pedro Tipo")');
 let mainNames = await page.$$eval('#slots [data-player] .name', (els) => els.map((el) => el.textContent));
-check('Los amigos quedan justo después', mainNames[0] === 'Zzz Nuevo' && mainNames[1] === 'Invitado 1' && mainNames[2] === 'Pedro Tipo', mainNames.slice(0, 3).join(' | '));
-check('Se ve de quién es el amigo', (await page.locator('#slots .slot', { has: page.locator('.name:text-is("Invitado 1")') }).locator('.friend-tag').innerText()).includes('invitado de Zzz Nuevo'));
+check('Los amigos quedan justo después', mainNames[0] === 'Zzz Nuevo' && mainNames[1] === 'Invitado 1 (Zzz Nuevo)' && mainNames[2] === 'Pedro Tipo', mainNames.slice(0, 3).join(' | '));
+check('Se ve de quién es el amigo', (await page.locator('#slots .slot', { has: page.locator('.name:text-is("Invitado 1 (Zzz Nuevo)")') }).locator('.friend-tag').innerText()).includes('invitado de Zzz Nuevo'));
 check('El nombre escrito también es amigo', (await page.locator('#slots .slot', { has: page.locator('.name:text-is("Pedro Tipo")') }).locator('.friend-tag').innerText()).includes('invitado de Zzz Nuevo'));
 await page.click('#btn-add-player');
 await page.fill('#player-name', 'ZZZ Nuevo');
@@ -3194,7 +3194,7 @@ await page.fill('#player-name', 'Segundo');
 await page.click('#friend-plus');
 await page.click('#player-form button[type=submit]');
 await page.waitForSelector('#slots .name:text-is("Segundo")');
-const amigoTags = await page.locator('#slots .slot', { has: page.locator('.name:text-is("Invitado 1")') }).locator('.friend-tag').allInnerTexts();
+const amigoTags = await page.locator('#slots .slot', { has: page.locator('.name:text-matches("^Invitado 1 \\(")') }).locator('.friend-tag').allInnerTexts();
 check('Invitado 1 de otro no se bloquea', amigoTags.some((text) => text.includes('Zzz Nuevo')) && amigoTags.some((text) => text.includes('Segundo')), amigoTags.join(' | '));
 await page.click('#btn-add-player');
 await page.fill('#player-name', 'Después');
@@ -3203,11 +3203,11 @@ await page.waitForSelector('#slots .name:text-is("Después")');
 await page.locator('#slots .slot', { has: page.locator('.name:text-is("Zzz Nuevo")') }).locator('[data-menu]').click();
 await page.click('#pm-friend');
 await page.waitForSelector('#friend-form');
-check('Más tarde sigue Invitado 2', (await page.textContent('#friend-form')).includes('Invitado 2'));
+check('Más tarde sigue Invitado 2 (Zzz Nuevo)', (await page.textContent('#friend-form')).includes('Invitado 2 (Zzz Nuevo)'));
 await page.click('#friend-form button[type=submit]');
-await page.waitForSelector('#slots .name:text-is("Invitado 2")');
+await page.waitForSelector('#slots .name:text-is("Invitado 2 (Zzz Nuevo)")');
 mainNames = await page.$$eval('#slots [data-player] .name', (els) => els.map((el) => el.textContent));
-check('El amigo nuevo no se va al final', mainNames.indexOf('Invitado 2') === mainNames.indexOf('Zzz Nuevo') + 3 && mainNames.indexOf('Invitado 2') < mainNames.indexOf('Después'), mainNames.join(' | '));
+check('El amigo nuevo no se va al final', mainNames.indexOf('Invitado 2 (Zzz Nuevo)') === mainNames.indexOf('Zzz Nuevo') + 3 && mainNames.indexOf('Invitado 2 (Zzz Nuevo)') < mainNames.indexOf('Después'), mainNames.join(' | '));
 
 await page.evaluate(async () => {
   const id = await window.__app.store.addMatch({ date: '2026-10-24', time: '11:00', note: 'Cupo amigos', perTeam: 5 }, window.__app.who);
@@ -3227,8 +3227,8 @@ await page.waitForSelector('#app-ask-text');
 const cupoAsk = (await page.locator('#app-ask-text').innerText()).trim();
 check('Avisa los lugares que faltan', cupoAsk === 'Queda 1 lugar: 2 van a quedar en lista de espera', cupoAsk);
 await page.click('#ask-ok');
-await page.waitForSelector('#wait-list .name:text-is("Invitado 2")');
-check('Entra primero quien invita', await page.locator('#slots .name:text-is("Casi Lleno")').count() === 1 && await page.locator('#slots .name:text-is("Invitado 1")').count() === 0);
+await page.waitForSelector('#wait-list .name:text-is("Invitado 2 (Casi Lleno)")');
+check('Entra primero quien invita', await page.locator('#slots .name:text-is("Casi Lleno")').count() === 1 && await page.locator('#slots .name:text-is("Invitado 1 (Casi Lleno)")').count() === 0);
 const waitTags = await page.locator('#wait-list .friend-tag').allInnerTexts();
 check('En la espera también son amigos', waitTags.length === 2 && waitTags.every((text) => text.includes('invitado de Casi Lleno')), waitTags.join(' | '));
 await page.locator('#slots .slot', { hasText: 'Relleno 1' }).locator('[data-menu]').click();
@@ -3239,14 +3239,14 @@ await page.waitForSelector('#ask-yes');
 await page.click('#ask-yes');
 await page.waitForFunction(() => {
   const names = [...document.querySelectorAll('#slots .name')].map((el) => el.textContent);
-  return names.indexOf('Invitado 1') === names.indexOf('Casi Lleno') + 1;
+  return names.indexOf('Invitado 1 (Casi Lleno)') === names.indexOf('Casi Lleno') + 1;
 });
 check('Al subir queda detrás de quien invita', true);
-check('Sigue el cartel de amigo', (await page.locator('#slots .slot', { has: page.locator('.name:text-is("Invitado 1")') }).locator('.friend-tag').innerText()).includes('invitado de Casi Lleno'));
-check('El otro amigo sigue en espera', await page.locator('#wait-list .name:text-is("Invitado 2")').count() === 1);
-await page.locator('#slots .slot', { has: page.locator('.name:text-is("Invitado 1")') }).locator('[data-pay]').click();
+check('Sigue el cartel de amigo', (await page.locator('#slots .slot', { has: page.locator('.name:text-is("Invitado 1 (Casi Lleno)")') }).locator('.friend-tag').innerText()).includes('invitado de Casi Lleno'));
+check('El otro amigo sigue en espera', await page.locator('#wait-list .name:text-is("Invitado 2 (Casi Lleno)")').count() === 1);
+await page.locator('#slots .slot', { has: page.locator('.name:text-is("Invitado 1 (Casi Lleno)")') }).locator('[data-pay]').click();
 await page.waitForSelector('#pay-form');
-check('El pago es de ese amigo', (await page.locator('#pay-form').innerText()).includes('Invitado 1'));
+check('El pago es de ese amigo', (await page.locator('#pay-form').innerText()).includes('Invitado 1 (Casi Lleno)'));
 await page.click('#pay-form [data-close]');
 await page.waitForFunction(() => document.querySelectorAll('dialog.sheet[open]').length === 0);
 
@@ -3255,12 +3255,12 @@ const amigosCard = page.locator('.match-card', { has: page.locator('.match-note'
 await amigosCard.waitFor();
 await amigosCard.click();
 await page.waitForSelector('#slots .name:text-is("Zzz Nuevo")');
-const amigoDeZzz = page.locator('#slots .slot', { has: page.locator('.name:text-is("Invitado 1")') }).filter({ hasText: 'invitado de Zzz Nuevo' });
+const amigoDeZzz = page.locator('#slots .slot', { has: page.locator('.name:text-is("Invitado 1 (Zzz Nuevo)")') }).filter({ hasText: 'invitado de Zzz Nuevo' });
 await amigoDeZzz.locator('[data-menu]').click();
 check('Un invitado no tiene Agregar invitado', await page.locator('#pm-friend').count() === 0);
 const guestInvite = await page.evaluate(async () => {
   const app = window.__app;
-  const guest = app.players.find((player) => player.name === 'Invitado 1' && player.invitedBy);
+  const guest = app.players.find((player) => player.name === 'Invitado 1 (Zzz Nuevo)' && player.invitedBy);
   const match = app.matches.find((item) => item.id === guest.matchId);
   try {
     await app.store.addPlayer(match, { name: 'No va', invitedBy: guest.id, invitedByName: guest.name, guestAuto: true }, app.who);
@@ -3283,7 +3283,7 @@ await page.screenshot({ path: '/opt/cursor/artifacts/screenshots/editar-amigo.pn
 await page.click('#player-form button[type=submit]');
 await page.waitForSelector('#slots .name:text-is("Pedro Real")');
 check('El amigo pasa a llamarse Pedro y sigue de Zzz Nuevo', (await page.locator('#slots .slot', { has: page.locator('.name:text-is("Pedro Real")') }).locator('.friend-tag').innerText()).includes('invitado de Zzz Nuevo'));
-check('Invitado 2 no se renumera', await page.locator('#slots .name:text-is("Invitado 2")').count() === 1 && await page.locator('#slots .name:text-is("Invitado 1")').count() === 1);
+check('Invitado 2 no se renumera', await page.locator('#slots .name:text-is("Invitado 2 (Zzz Nuevo)")').count() === 1 && await page.locator('#slots .name:text-is("Invitado 1 (Segundo)")').count() === 1);
 const amigoGuardado = await page.evaluate(() => {
   const db = JSON.parse(localStorage.getItem('f7c-demo-db'));
   const player = Object.values(db.players).find((row) => row.name === 'Pedro Real');
@@ -3303,10 +3303,10 @@ check('El WhatsApp queda privado y se puede guardar en Jugadores', amigoGuardado
 await page.locator('#slots .slot', { has: page.locator('.name:text-is("Zzz Nuevo")') }).locator('[data-menu]').click();
 await page.click('#pm-friend');
 await page.waitForSelector('#friend-form');
-check('El próximo vacío sigue en Invitado 3', (await page.textContent('#friend-form')).includes('Invitado 3'));
+check('El próximo vacío sigue en Invitado 3 (Zzz Nuevo)', (await page.textContent('#friend-form')).includes('Invitado 3 (Zzz Nuevo)'));
 await page.click('#friend-form button[type=submit]');
-await page.waitForSelector('#slots .name:text-is("Invitado 3")');
-check('Invitado 2 sigue igual después del nuevo', await page.locator('#slots .name:text-is("Invitado 2")').count() === 1 && await page.locator('#slots .name:text-is("Invitado 3")').count() === 1);
+await page.waitForSelector('#slots .name:text-is("Invitado 3 (Zzz Nuevo)")');
+check('Invitado 2 sigue igual después del nuevo', await page.locator('#slots .name:text-is("Invitado 2 (Zzz Nuevo)")').count() === 1 && await page.locator('#slots .name:text-is("Invitado 3 (Zzz Nuevo)")').count() === 1);
 await page.evaluate(() => {
   const db = JSON.parse(localStorage.getItem('f7c-demo-db'));
   const entries = Object.entries(db.players);
@@ -3594,9 +3594,9 @@ check('Bajar a la espera lo deja al final y no sube a nadie', await page.locator
   await page.click('#friend-form button[type=submit]');
   const guestsIn = (id, host) => page.evaluate(({ id, host }) => window.__app.players.filter((p) => p.matchId === id && p.invitedBy === host).map((p) => `${p.name}${p.waiting ? '(espera)' : ''}`).sort().join(','), { id, host });
   await page.waitForFunction(({ c, host }) => window.__app.players.filter((p) => p.matchId === c && p.invitedBy === host).length === 2, { c: ids.c, host: ids.host[ids.c] });
-  check('Los mismos invitados quedan en su partido', await guestsIn(ids.a, ids.host[ids.a]) === 'Invitado 1,Pipa');
-  check('En el otro partido quedan con el mismo anfitrión y nombre', await guestsIn(ids.c, ids.host[ids.c]) === 'Invitado 1,Pipa');
-  check('En el partido lleno van a la lista de espera', await guestsIn(ids.b, ids.host[ids.b]) === 'Invitado 1(espera),Pipa(espera)');
+  check('Los mismos invitados quedan en su partido', await guestsIn(ids.a, ids.host[ids.a]) === 'Invitado 1 (Doble Día),Pipa');
+  check('En el otro partido quedan con el mismo anfitrión y nombre', await guestsIn(ids.c, ids.host[ids.c]) === 'Invitado 1 (Doble Día),Pipa');
+  check('En el partido lleno van a la lista de espera', await guestsIn(ids.b, ids.host[ids.b]) === 'Invitado 1 (Doble Día)(espera),Pipa(espera)');
   check('Un partido del día donde él no juega no cambia', await page.evaluate((d) => window.__app.players.filter((p) => p.matchId === d).length === 1, ids.d));
   const promo = await page.evaluate(async ({ a, c }) => {
     const { sameDayTitulars, playerPromoKey } = await import('./js/prices.js');
@@ -3615,7 +3615,7 @@ check('Bajar a la espera lo deja al final y no sube a nadie', await page.locator
   await page.click('#friend-form button[type=submit]');
   await page.waitForFunction(({ a, host }) => window.__app.players.filter((p) => p.matchId === a && p.invitedBy === host).length === 3, { a: ids.a, host: ids.host[ids.a] });
   await page.waitForTimeout(300);
-  check('Si se desmarca, en los otros partidos no se agrega', await guestsIn(ids.c, ids.host[ids.c]) === 'Invitado 1,Pipa' && await guestsIn(ids.a, ids.host[ids.a]) === 'Invitado 1,Invitado 2,Pipa');
+  check('Si se desmarca, en los otros partidos no se agrega', await guestsIn(ids.c, ids.host[ids.c]) === 'Invitado 1 (Doble Día),Pipa' && await guestsIn(ids.a, ids.host[ids.a]) === 'Invitado 1 (Doble Día),Invitado 2 (Doble Día),Pipa');
   await page.evaluate(async (list) => {
     const app = window.__app;
     for (const id of list) {
