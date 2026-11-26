@@ -1,10 +1,10 @@
 // v256: cuando falla un guardado de Agregar jugador (o de invitados), el aviso del
 // admin dice el paso y el documento, la consola lo registra, y lo demás no cambia
 // (lo que ya se guardó queda, los invitados no se cargan, el organizador ve el texto corto).
-// Fallas reales de firestore.rules, con datos ficticios:
-//  - una fila vieja de la misma ficha en un partido que ya no existe (su tarjeta de
-//    confirmación no se puede reescribir: es lo que pasaba con un jugador en prueba);
-//  - un partido viejo con una nota de más de 300 letras (no se puede actualizar).
+// Falla real de firestore.rules, con datos ficticios: un partido viejo con una nota
+// de más de 300 letras (no se puede actualizar). (La fila de un partido no cargado,
+// que hacía fallar la confirmación, ya no falla desde v257: ver
+// tests/partido-no-cargado-v257.mjs.)
 // Uso (con firestore y auth en el emulador):
 // FIRESTORE_EMULATOR_HOST=127.0.0.1:8181 FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 node tests/diagnostico-guardado-v256.mjs http://127.0.0.1:18560/
 import { createRequire } from 'node:module';
@@ -55,9 +55,8 @@ await testEnv.withSecurityRulesDisabled(async (c) => {
   await put('matches', 'mA', match('20:00'));
   await put('matches', 'mC', match('22:00'));
   await put('matches', 'mN', match('18:00', { note: 'x'.repeat(301), playerCount: 1 }));
+  await put('matches', 'mN2', match('19:00', { note: 'y'.repeat(301), playerCount: 0 }));
   await put('players', 'hN', row('mN', { name: 'Ficticio Anfitrión' }));
-  // La fila que quedó de un partido borrado: misma ficha, con su token de confirmación.
-  await put('players', 'quedoRepetido', row('partidoBorrado', { name: 'Ficticio Repetido', rosterId: RID, confirmToken: 'tokFicticioQuedo0001' }));
 });
 
 const allPlayers = async () => {
@@ -92,7 +91,7 @@ const open = async (who) => {
   await page.fill('#login-email', who.email);
   await page.fill('#login-password', who.pass);
   await page.click('#login-form button[type=submit]');
-  await page.waitForFunction(() => window.__app?.loaded && window.__app.roster?.length && window.__app.matches?.length >= 3, null, { timeout: 20000 });
+  await page.waitForFunction(() => window.__app?.loaded && window.__app.roster?.length && window.__app.matches?.length >= 4, null, { timeout: 20000 });
   return { ctx, page, logs, errors };
 };
 const addWithGuests = async (page, matchId, name, guests) => {
@@ -110,12 +109,11 @@ const toastText = async (page) => {
 };
 
 try {
-  // 1) Admin: Ficticio Repetido con 2 invitados (el caso de prueba).
+  // 1) Admin: Ficticio Repetido con 2 invitados en un partido que no se puede actualizar.
   const admin = await open(ADMIN);
-  await addWithGuests(admin.page, 'mA', 'Ficticio Repetido', 2);
+  await addWithGuests(admin.page, 'mN', 'Ficticio Repetido', 2);
   const t1 = await toastText(admin.page);
-  check('Admin: el aviso dice el paso (al anotar a Ficticio Repetido › en la confirmación)', t1.startsWith('No se pudo guardar al anotar a Ficticio Repetido › en la confirmación'), t1);
-  check('Admin: el aviso dice el documento (la fila vieja y su partido que no está)', t1.includes('confirmations (de players/quedoRepetido, partido partidoBorrado, que no está cargado)'), t1);
+  check('Admin: el aviso dice el paso y el documento (al anotar a Ficticio Repetido › al actualizar el partido (matches/mN))', t1.startsWith('No se pudo guardar al anotar a Ficticio Repetido › al actualizar el partido (matches/mN)'), t1);
   check('Admin: y el motivo corto de siempre', t1.endsWith(': Firebase rechazó el permiso'), t1);
   check('Admin: el aviso es el de varias líneas', await admin.page.locator('#toast.detail').count() === 1);
   const radius = await admin.page.$eval('#toast', (el) => getComputedStyle(el).borderRadius);
@@ -124,17 +122,13 @@ try {
   check('Admin: entra en la pantalla del teléfono', box.left >= 0 && box.right <= box.w, JSON.stringify(box));
   await admin.page.waitForTimeout(8000);
   check('Admin: sigue a la vista 8 segundos después', await admin.page.isVisible('#toast'));
-  check('La consola registra el paso y el documento', admin.logs.some((l) => l.startsWith('Guardado: falló al anotar a Ficticio Repetido › en la confirmación (confirmations (de players/quedoRepetido')), admin.logs.join(' | ').slice(0, 400));
+  check('La consola registra el paso y el documento', admin.logs.some((l) => l.startsWith('Guardado: falló al anotar a Ficticio Repetido › al actualizar el partido (matches/mN)')), admin.logs.join(' | ').slice(0, 400));
   await admin.page.click('#toast');
   check('Tocándolo se cierra', await admin.page.isHidden('#toast'));
-  const afterA = (await allPlayers()).filter((p) => p.matchId === 'mA');
-  check('Sin cambio de comportamiento: Ficticio Repetido quedó, los invitados no', afterA.length === 1 && afterA[0].name === 'Ficticio Repetido', JSON.stringify(afterA.map((p) => p.name)));
+  const afterN = (await allPlayers()).filter((p) => p.matchId === 'mN').map((p) => p.name).sort();
+  check('Sin cambio de comportamiento: el titular quedó, los invitados no', JSON.stringify(afterN) === JSON.stringify(['Ficticio Anfitrión', 'Ficticio Repetido']), JSON.stringify(afterN));
 
-  // 2) Partido que no se puede actualizar: el titular y después un invitado de un anotado.
-  await addWithGuests(admin.page, 'mN', 'Ficticio Nuevo', 1);
-  const t2 = await toastText(admin.page);
-  check('Admin: «al anotar a Ficticio Nuevo › al actualizar el partido (matches/mN)»', t2 === 'No se pudo guardar al anotar a Ficticio Nuevo › al actualizar el partido (matches/mN): Firebase rechazó el permiso', t2);
-  await admin.page.click('#toast');
+  // 2) El invitado de un anotado, en el mismo partido.
   await admin.page.waitForSelector('#slots .name:text-is("Ficticio Anfitrión")', { timeout: 15000 });
   await admin.page.locator('#slots .slot', { has: admin.page.locator('.name:text-is("Ficticio Anfitrión")') }).locator('[data-menu]').click();
   await admin.page.click('#pm-friend');
@@ -147,17 +141,17 @@ try {
 
   // 3) Organizador: el mismo caso, el aviso corto de siempre (sin detalle).
   const org = await open(ORG);
-  await addWithGuests(org.page, 'mC', 'Ficticio Repetido', 2);
+  await addWithGuests(org.page, 'mN2', 'Ficticio Repetido', 2);
   const t4 = await toastText(org.page);
   check('Organizador: el aviso no cambia («No se pudo guardar: Firebase rechazó el permiso»)', t4 === 'No se pudo guardar: Firebase rechazó el permiso', t4);
   check('Organizador: sin el aviso largo', await org.page.locator('#toast.detail').count() === 0);
-  check('Organizador: la consola igual registra el paso', org.logs.some((l) => l.startsWith('Guardado: falló al anotar a Ficticio Repetido › en la confirmación')));
+  check('Organizador: la consola igual registra el paso', org.logs.some((l) => l.startsWith('Guardado: falló al anotar a Ficticio Repetido › al actualizar el partido (matches/mN2)')));
 
   // 4) Lo que anda sigue andando: otro jugador nuevo con 2 invitados.
   await addWithGuests(org.page, 'mC', 'Ficticio Dos', 2);
   await org.page.waitForSelector('#slots .name:text-is("Invitado 2 (Ficticio Dos)")', { timeout: 15000 });
   const okC = (await allPlayers()).filter((p) => p.matchId === 'mC').map((p) => p.name).sort();
-  check('Otro jugador con 2 invitados se guarda entero', ['Ficticio Dos', 'Invitado 1 (Ficticio Dos)', 'Invitado 2 (Ficticio Dos)'].every((n) => okC.includes(n)), JSON.stringify(okC));
+  check('Otro jugador con 2 invitados se guarda entero', JSON.stringify(okC) === JSON.stringify(['Ficticio Dos', 'Invitado 1 (Ficticio Dos)', 'Invitado 2 (Ficticio Dos)']), JSON.stringify(okC));
   check('Organizador: sin errores de página', org.errors.length === 0, org.errors.join(' | '));
   await org.ctx.close();
 } finally {
