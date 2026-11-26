@@ -675,6 +675,15 @@ function presentRows(rows, contacts, uid) {
  * El valor guardado puede estar viejo. Se toma la cantidad cargada y se
  * deja en 0 como mínimo. Solo se escribe en el partido que se toca.
  */
+/**
+ * v257: las filas de la misma persona cuya tarjeta de confirmación se reescribe:
+ * la propia siempre; las demás, solo si su partido está cargado.
+ */
+export function confirmSyncRows(related, matches, focusId = '') {
+  const loaded = new Set((matches || []).map((match) => match?.id).filter(Boolean));
+  return (related || []).filter((row) => row && (row.id === focusId || loaded.has(row.matchId)));
+}
+
 export function nextPlayerCount(delta, localCount) {
   const next = (Number(localCount) || 0) + (Number(delta) || 0);
   if (!Number.isFinite(next)) return 0;
@@ -4069,7 +4078,9 @@ export class FirebaseStore {
       if (!key) return;
       const slots = upcomingConfirmSlots({ players: pool, matches, player: current });
       const related = players.filter((row) => row.confirmToken && personKey(row, pool) === key);
-      for (const row of related) {
+      // v257: solo las filas cuyo partido está cargado (y la propia). Un partido viejo
+      // que no está cargado no se toca: su tarjeta saldría sin hora y las reglas la niegan.
+      for (const row of confirmSyncRows(related, matches, current.id)) {
         const match = matches.find((item) => item.id === row.matchId) || null;
         // v256: si falla la tarjeta de OTRA fila de la misma persona, el aviso dice cuál.
         await saveStep('', `confirmations (de players/${row.id}, partido ${row.matchId || '?'}${match ? '' : ', que no está cargado'})`, () => this._putConfirmation(row.confirmToken, row.id, row, match, slots));
