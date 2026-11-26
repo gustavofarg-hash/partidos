@@ -123,6 +123,7 @@ import { canSeeLog, inLogRange, matchEditDetail, pagoEntry, partidoEntry, paymen
 import { behaviorDeleteLog, behaviorLog, cleanBehaviorEntry } from './behavior.js';
 import { statsFetchRange } from './stats-range.js';
 import { activeSuspenderUids, matchOrganizerUids, suspendFlagId } from './guest-block.js';
+import { saveStep } from './save-step.js';
 
 function reportBackupProgress(onProgress, done, total) {
   if (typeof onProgress !== 'function') return;
@@ -674,6 +675,15 @@ function presentRows(rows, contacts, uid) {
  * El valor guardado puede estar viejo. Se toma la cantidad cargada y se
  * deja en 0 como mínimo. Solo se escribe en el partido que se toca.
  */
+/**
+ * v257: las filas de la misma persona cuya tarjeta de confirmación se reescribe:
+ * la propia siempre; las demás, solo si su partido está cargado.
+ */
+export function confirmSyncRows(related, matches, focusId = '') {
+  const loaded = new Set((matches || []).map((match) => match?.id).filter(Boolean));
+  return (related || []).filter((row) => row && (row.id === focusId || loaded.has(row.matchId)));
+}
+
 export function nextPlayerCount(delta, localCount) {
   const next = (Number(localCount) || 0) + (Number(delta) || 0);
   if (!Number.isFinite(next)) return 0;
@@ -4068,9 +4078,12 @@ export class FirebaseStore {
       if (!key) return;
       const slots = upcomingConfirmSlots({ players: pool, matches, player: current });
       const related = players.filter((row) => row.confirmToken && personKey(row, pool) === key);
-      for (const row of related) {
+      // v257: solo las filas cuyo partido está cargado (y la propia). Un partido viejo
+      // que no está cargado no se toca: su tarjeta saldría sin hora y las reglas la niegan.
+      for (const row of confirmSyncRows(related, matches, current.id)) {
         const match = matches.find((item) => item.id === row.matchId) || null;
-        await this._putConfirmation(row.confirmToken, row.id, row, match, slots);
+        // v256: si falla la tarjeta de OTRA fila de la misma persona, el aviso dice cuál.
+        await saveStep('', `confirmations (de players/${row.id}, partido ${row.matchId || '?'}${match ? '' : ', que no está cargado'})`, () => this._putConfirmation(row.confirmToken, row.id, row, match, slots));
       }
     } finally {
       this._syncingConfirm = false;
@@ -4306,19 +4319,23 @@ export class FirebaseStore {
     // v233: con teléfono, el jugador y su guardia van en el mismo lote.
     const guardKey = guardKeyFor(player, this._rosterPhoneKey(rosterId));
     let ref;
+    // v256: cada paso deja su nombre y su documento en el error (diagnóstico para el admin).
     if (guardKey) {
       const newId = opts.id || newPlayerDocId();
       ref = { id: newId };
-      await this._createPlayerWithGuard(doc(this.db, 'players', newId), newId, player, guardKey, { self: selfRow, rosterId });
+      await saveStep('al guardar el jugador', `players/${newId} + phoneGuards`, () => this._createPlayerWithGuard(doc(this.db, 'players', newId), newId, player, guardKey, { self: selfRow, rosterId }));
     } else {
-      ref = opts.id
-        ? doc(this.db, 'players', opts.id)
-        : await addDoc(collection(this.db, 'players'), player);
-      if (opts.id) await setDoc(ref, player);
+      ref = await saveStep('al guardar el jugador', opts.id ? `players/${opts.id}` : 'players (nuevo)', async () => {
+        const made = opts.id
+          ? doc(this.db, 'players', opts.id)
+          : await addDoc(collection(this.db, 'players'), player);
+        if (opts.id) await setDoc(made, player);
+        return made;
+      });
     }
     const stored = this.state.matches.find((item) => item.id === match.id) || match;
-    await updateDoc(doc(this.db, 'matches', match.id), { ...countPatch(this.fs, stored, 1, mates.length), updatedAt: now });
-    if (canon) {
+    await saveStep('al actualizar el partido', `matches/${match.id}`, () => updateDoc(doc(this.db, 'matches', match.id), { ...countPatch(this.fs, stored, 1, mates.length), updatedAt: now }));
+    if (canon) await saveStep('con el teléfono', `playerContacts/${ref.id}`, async () => {
       try {
         await this._writeContactDoc('players', ref.id, canon, player, { visibleToAll: data.phoneShared === true });
         await updateDoc(doc(this.db, 'players', ref.id), { hasPhone: true, phone: deleteField(), phoneShared: data.phoneShared === true });
@@ -4328,13 +4345,13 @@ export class FirebaseStore {
         this._contactsLive = false;
         await updateDoc(doc(this.db, 'players', ref.id), { phone: canon, hasPhone: true });
       }
-    }
-    await this._writeConfirmation(token, ref.id, player, match);
-    if (!(selfHold || opts.selfSignup === true)) await this._appendLogs([partidoEntry(this._actor(), stored, this.state.venues, {
+    });
+    await saveStep('en la confirmación', `confirmations (de players/${ref.id})`, () => this._writeConfirmation(token, ref.id, player, match));
+    if (!(selfHold || opts.selfSignup === true)) await saveStep('en el Registro', 'log', () => this._appendLogs([partidoEntry(this._actor(), stored, this.state.venues, {
       type: 'alta',
       ...playerLogFields({ id: ref.id, ...player }, [...mates, { id: ref.id, ...player }], this._logRoster()),
       detail: opts.noPlay === true ? 'No jugó pero pagó' : selfSignupDetail(player, waiting),
-    })]);
+    })]));
     return ref.id;
   }
   /** Huella de la ficha (la ve el organizador y, en su enlace, el jugador). */

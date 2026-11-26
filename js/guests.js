@@ -1,7 +1,7 @@
 // Amigos de un jugador y la regla de no anotar dos veces al mismo en un partido.
 // Puro: no escribe en Firestore. El organizador frena la repetición en el
 // cliente; el Autoservicio además usa un id fijo por partido y ficha.
-import { cleanShortName, foldText, guestHostKey, isNamedGuest, phoneIdentity } from './roster.js';
+import { cleanShortName, foldText, guestHostKey, guestIdentityName, isNamedGuest, phoneIdentity } from './roster.js';
 
 export const ALREADY_IN_MATCH = 'Ya está anotado en este partido';
 /** Lo que ve el jugador si intenta anotarse dos veces. */
@@ -67,14 +67,41 @@ export function normName(value) {
   return foldText(value).replace(/\s+/g, ' ').trim();
 }
 
-/** "Invitado 1" o el viejo "Amigo 1". El número es de quien invita, no del partido. */
+/**
+ * "Invitado 1 (Nico M.)" (v255), "Invitado 1" o el viejo "Amigo 1".
+ * El número es de quien invita, no del partido.
+ */
 export function isAutoGuestName(name) {
-  return /^(?:amigo|invitado) \d+$/.test(normName(name));
+  return /^(?:amigo|invitado) \d+(?: \(.+\))?$/.test(normName(name));
 }
 
 function guestNumber(name) {
-  const match = normName(name).match(/^(?:amigo|invitado) (\d+)$/);
+  const match = normName(name).match(/^(?:amigo|invitado) (\d+)(?: \(.+\))?$/);
   return match ? Number(match[1]) : 0;
+}
+
+/** Tope del nombre de un jugador (firestore.rules: name.size() <= 60). */
+export const GUEST_NAME_MAX = 60;
+
+/**
+ * v255: el nombre automático lleva entre paréntesis cómo se ve el que invita
+ * (su apodo entero, o su Nombre si no tiene): «Invitado 1 (Nico M.)».
+ * Si no entra en 60, se corta lo de adentro con «…».
+ */
+export function autoGuestName(number, hostLabel = '') {
+  const base = `Invitado ${number}`;
+  const label = String(hostLabel || '').trim().replace(/\s+/g, ' ');
+  if (!label) return base;
+  const room = GUEST_NAME_MAX - Array.from(base).length - 3;
+  if (room < 2) return base;
+  const chars = Array.from(label);
+  const text = chars.length > room ? `${chars.slice(0, room - 1).join('').trimEnd()}…` : label;
+  return `${base} (${text})`;
+}
+
+/** v255: el mismo invitado automático del mismo anfitrión, con o sin «(…)». */
+export function sameGuestName(a, b) {
+  return guestIdentityName(a) === guestIdentityName(b);
 }
 
 export function isGenericGuest(player) {
@@ -181,14 +208,14 @@ export function attachRosterGuest(friend, person) {
   };
 }
 
-export function resolveFriendNames(typed, taken = []) {
+export function resolveFriendNames(typed, taken = [], hostLabel = '') {
   let max = 0;
   for (const name of taken || []) max = Math.max(max, guestNumber(name));
   return (typed || []).map((raw) => {
     const name = String(raw ?? '').trim().replace(/\s+/g, ' ');
     if (name) return { name, guestAuto: false };
     max += 1;
-    return { name: `Invitado ${max}`, guestAuto: true };
+    return { name: autoGuestName(max, hostLabel), guestAuto: true };
   });
 }
 
@@ -260,13 +287,13 @@ export function sameDayPromoGuestTwins({ player, players, matches }) {
   if (!player?.id || phoneIdentity(player)) return [];
   if (!String(player.invitedBy || '').trim()) return [];
   const hostKey = guestHostKey(player, players);
-  const name = foldText(player.name);
+  const name = guestIdentityName(player.name);
   const day = matchDay(player, matches);
   if (!hostKey || !name || !day) return [];
   const same = (players || []).filter((other) => {
     if (!other?.id || phoneIdentity(other)) return false;
     if (!String(other.invitedBy || '').trim()) return false;
-    if (foldText(other.name) !== name) return false;
+    if (guestIdentityName(other.name) !== name) return false;
     if (guestHostKey(other, players) !== hostKey) return false;
     return matchDay(other, matches) === day;
   });

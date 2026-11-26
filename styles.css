@@ -1254,6 +1254,8 @@ html.anon-lock #view .loading { display: none; }
   max-width: calc(100% - 32px); box-shadow: 0 6px 20px rgba(0,0,0,.25);
 }
 @media (prefers-color-scheme: dark) { .toast { background: #e8f2ec; color: #0b1510; } }
+/* v256: el aviso del admin con el paso y el documento que fallaron: varias líneas legibles. */
+.toast.detail { border-radius: 14px; font-weight: 600; font-size: 0.84375rem; line-height: 1.35; text-align: left; overflow-wrap: anywhere; width: max-content; cursor: pointer; }
 
 .gate { max-width: 420px; margin: 40px auto; text-align: center; }
 .gate .ball { font-size: 3.375rem; }
