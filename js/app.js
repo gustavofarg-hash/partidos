@@ -54,7 +54,7 @@ import {
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v257';
+const APP_VERSION = 'f7c-v258';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -2667,8 +2667,13 @@ async function openReminders(m) {
     ...p,
     confirmToken: tokens.get(p.id) || p.confirmToken,
   }));
+  // v258: las filas como están guardadas, con el token nuevo y sin el WhatsApp de la ficha
+  // (si no, la persona no coincide con su fila del otro partido del día).
   const rosterNow = new Map(app.players.map((player) => [player.id, player]));
-  for (const player of fresh) rosterNow.set(player.id, { ...rosterNow.get(player.id), ...player });
+  for (const player of playersOf(m.id)) {
+    const token = tokens.get(player.id);
+    rosterNow.set(player.id, { ...player, ...rosterNow.get(player.id), ...(token ? { confirmToken: token } : {}) });
+  }
   const linkById = new Map(reminderLinks({
     match: m, players: fresh, venue: placeOf(m), roster: app.roster,
     allPlayers: [...rosterNow.values()], matches: app.matches,
@@ -2736,10 +2741,28 @@ async function openReminders(m) {
         line.textContent = `${nowProg.sent} de ${nowProg.total} enviados${showAll ? ' · todos' : ' · los que anotaste'}`;
       }
       noteConfirmSender(id, person?.confirmToken || '');
-      run(app.store.markReminderSent(id));
+      run(markReminderSentWithDay(id, linkById.get(id)?.alsoIds || []));
     });
   };
   paint();
+}
+
+/**
+ * v258: «Enviado» en esa fila y en las de la misma persona en los otros partidos del
+ * día donde juega (no la espera). Si las reglas todavía no dejan marcar la fila de un
+ * partido ajeno, esa queda sin marcar y no se avisa: el mensaje ya salió.
+ */
+async function markReminderSentWithDay(id, alsoIds = []) {
+  await app.store.markReminderSent(id);
+  for (const other of alsoIds) {
+    if (!other || other === id) continue;
+    try {
+      await app.store.markReminderSentAlso(other);
+    } catch (error) {
+      if (!isPermissionDenied(error)) throw error;
+      console.warn('Recordatorio: no se pudo marcar como enviado players/' + other, error?.code || '');
+    }
+  }
 }
 
 function moveWait(matchId, id, dir, disabled) {

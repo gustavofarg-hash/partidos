@@ -1610,6 +1610,10 @@ class LocalStore {
   async markReminderSent(id) {
     await this.updatePlayer(id, { reminderSentAt: Date.now() });
   }
+  /** v258: la fila del mismo jugador en otro partido del día. */
+  async markReminderSentAlso(id) {
+    await this.markReminderSent(id);
+  }
   async deletePlayer(id, opts = {}) {
     const db = this._load();
     const player = db.players[id];
@@ -5190,6 +5194,15 @@ export class FirebaseStore {
   }
   async markReminderSent(id) {
     await this.updatePlayer(id, { reminderSentAt: Date.now() });
+  }
+  /**
+   * v258: «Enviado» en la fila del mismo jugador en otro partido del día. Solo esa marca:
+   * es lo único que deja la regla para un partido de otro organizador.
+   */
+  async markReminderSentAlso(id) {
+    const { doc, updateDoc } = this.fs;
+    const now = Date.now();
+    await updateDoc(doc(this.db, 'players', id), { reminderSentAt: now, updatedAt: now });
   }
   async deletePlayer(id, opts = {}) {
     const { doc, writeBatch } = this.fs;
