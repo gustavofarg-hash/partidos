@@ -40,7 +40,7 @@ import { compensationFingerprint, dayCompensation, reconcileTransfers, splitMode
 import { balanceTeams, bumpGoals, bumpScore, dropPlayerOn, emptyTeams, goaliesLeft, movePlayer, normalizeScore, normalizeTeams, orderTeamsByGoal, teamDragDrop, teamsBalance, teamsMessage } from './teams.js';
 import { appInstallUrl, appShareMessage, isPlayerDeepLink, organizerMatchesTitle, playerLink } from './share.js';
 import { isTrialPage } from './trial.js';
-import { isSelfPending, pendingSelfSignups, selfSignupRows, signupLimitFrom, signupLimitRecord } from './self-signup.js';
+import { canConfirmSpot, isSelfPending, pendingSelfSignups, selfSignupRows, signupLimitFrom, signupLimitRecord } from './self-signup.js';
 import { confirmBannerText, confirmWhatsAppText, unseenConfirmations } from './confirm-notice.js';
 import { iosPushHint, playerPushAvailable, registerOrganizerPush, registerPlayerPush } from './push.js';
 import { bindTap, tapChose } from './tap.js';
@@ -54,7 +54,7 @@ import {
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v259';
+const APP_VERSION = 'f7c-v260';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -1596,6 +1596,7 @@ function renderHome(focusPending = false) {
     const accept = event.target.closest('[data-accept]');
     if (accept) {
       const player = app.players.find((item) => item.id === accept.dataset.accept);
+      if (!player || !canConfirmSpot(player, actor().uid)) return;
       return confirmPlayerPlace(player, 'Aceptado');
     }
     const reject = event.target.closest('[data-reject]');
@@ -2581,10 +2582,12 @@ function confirmTag(p) {
 }
 function confirmSpotButton(p) {
   if (p?.tentative !== true) return '';
+  // v260: la anotación pendiente del Autoservicio la confirma solo el organizador del link.
+  if (!canConfirmSpot(p, actor().uid)) return '';
   return `<button type="button" class="btn confirm-spot" data-confirm-spot="${esc(p.id)}">Confirmar lugar</button>`;
 }
 function clearReservedSpot(player) {
-  if (!player || player.tentative !== true) return;
+  if (!player || player.tentative !== true || !canConfirmSpot(player, actor().uid)) return;
   confirmPlayerPlace(player, 'Lugar confirmado');
 }
 
@@ -8343,7 +8346,7 @@ function openPlayerMenu(m, p) {
       ${canAnnotate ? `<button class="btn" id="pm-pay">${paidAlready ? 'Editar pago' : 'Cargar pago'}</button>` : ''}
       ${phoneView.phone && match ? `<a class="btn" id="pm-wa" href="${esc(waHref(phoneView.phone, waMessage(match, p)))}" target="_blank" rel="noopener"${confirmSenderAttr(p, waMessage(match, p))}>${ICON.wa}Mandar WhatsApp</a>` : phoneHidden(phoneView) ? `<button class="btn" type="button" disabled>${esc(PRIVATE_WA_TEXT)}</button>` : `<button class="btn" id="pm-phone"${own ? '' : ' disabled'}>Cargar WhatsApp</button>`}
       <button class="btn" id="pm-profile">Ver perfil</button>
-      ${p.tentative === true ? '<button class="btn" id="pm-confirm-spot">Confirmar lugar</button>' : ''}
+      ${p.tentative === true && canConfirmSpot(p, actor().uid) ? '<button class="btn" id="pm-confirm-spot">Confirmar lugar</button>' : ''}
       ${canAnnotate && !isWaiting(p) && !isNoPlay(p) ? `<button class="btn" id="pm-attendance">${p.confirmed === 'si' ? 'Quitar confirmación' : 'Confirmó asistencia'}</button>` : ''}
       ${p.tentative === true && p.confirmed === 'no' ? '<p class="hint">No juega · se puede liberar el lugar</p>' : ''}
       <button class="btn" id="pm-edit"${own || canAnnotate || canWritePlayer(p, actorWithRole()) ? '' : ' disabled'}>${ICON.edit}Editar</button>
