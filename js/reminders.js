@@ -213,16 +213,15 @@ export function confirmStatus(player) {
     if (player.confirmed === 'no') {
       return { cls: 'reserved', text: 'Reservado · a confirmar', note: 'No juega · se puede liberar el lugar' };
     }
+    // v259: el sí del link no confirma el lugar: queda como dato para el organizador.
+    if (player.confirmed === 'si') {
+      return { cls: 'reserved', text: 'Reservado · a confirmar', note: 'Respondió que juega', said: 'si' };
+    }
     return { cls: 'reserved', text: 'Reservado · a confirmar' };
   }
   if (player?.confirmed === 'si') return { cls: 'ok', text: '✅ Confirmó' };
   if (player?.confirmed === 'no') return { cls: 'no', text: '❌ No juega' };
   return { cls: 'pending', text: '⏳ Sin respuesta' };
-}
-
-/** El sí del link suelta el lugar reservado. El no lo deja reservado. */
-export function reservationClearedByAnswer(player) {
-  return player?.tentative === true && player?.confirmed === 'si';
 }
 
 export function confirmSummary(players) {
