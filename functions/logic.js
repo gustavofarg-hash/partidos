@@ -97,6 +97,48 @@ function organizerUids(match, holders, onlyUid) {
   return [...new Set(ids)];
 }
 
+/**
+ * v260: los celulares de cada organizador, agrupados por uid, en el orden de uids.
+ * Cada organizador recibe su propio token de Aceptar/Rechazar: así se sabe quién
+ * tocó. Un organizador sin celulares registrados no recibe nada (ni token).
+ */
+function recipientGroups(uids, rows) {
+  const byUid = new Map();
+  for (const uid of uids || []) {
+    const id = String(uid || '').trim();
+    if (id && !byUid.has(id)) byUid.set(id, []);
+  }
+  for (const row of rows || []) {
+    const id = String(row?.uid || '').trim();
+    if (!byUid.has(id) || !row?.token) continue;
+    byUid.get(id).push(row);
+  }
+  return [...byUid.entries()].filter(([, list]) => list.length).map(([uid, list]) => ({ uid, rows: list }));
+}
+
+/** v260: nombre del organizador para acceptedBy y el Registro (como acceptedByPatch de la app). */
+function organizerLabel(name) {
+  return String(name || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+}
+
+/**
+ * v260: qué se escribe al decidir desde el aviso. Con el uid del organizador que
+ * recibió el aviso (y su nombre), Aceptar guarda acceptedBy y el Registro lo nombra.
+ * Un token viejo sin uid (de antes de v260) sigue como antes: «Desde el aviso».
+ */
+function decisionWrites(action, decision, organizerName, now) {
+  const uid = String(action?.uid || '').trim();
+  const name = uid ? organizerLabel(organizerName) : '';
+  const playerPatch = decision === 'aceptar'
+    ? { tentative: null, tentativeAt: null, updatedAt: now, ...(name ? { acceptedBy: name } : {}) }
+    : null;
+  return {
+    playerPatch,
+    actorUid: uid && name ? uid : 'aviso',
+    actorName: name || 'Desde el aviso',
+  };
+}
+
 const DECIDE_URL = decideUrlFor(PRODUCTION_PROJECT);
 const ACTION_TTL_MS = 12 * 60 * 60 * 1000;
 
@@ -147,5 +189,6 @@ function actionDecision(doc, player, decision, now, spotsLeft) {
 module.exports = {
   classifySelfSignup, pushCopy, organizerUids, dayLabel,
   pushFields, noticeActions, actionDecision, DECIDE_URL, ACTION_TTL_MS,
+  recipientGroups, organizerLabel, decisionWrites,
   appBase, decideUrlFor, PRODUCTION_PROJECT, TRIAL_PROJECT,
 };
