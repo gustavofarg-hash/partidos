@@ -538,6 +538,7 @@ html.dark #self-list .self-check { color: #4ade80; }
 }
 .reserved-badge.declined { outline: 2px solid var(--danger); }
 .reserved-free { display: block; color: var(--danger); font-size: 0.75rem; font-weight: 800; }
+.reserved-said { display: block; color: var(--green); font-size: 0.75rem; font-weight: 800; }
 @media (prefers-color-scheme: dark) {
   .reserved-badge { color: #dbeafe; background: #1e3a5f; }
 }
