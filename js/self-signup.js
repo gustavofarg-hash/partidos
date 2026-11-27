@@ -71,12 +71,15 @@ export function signupRateDecision(prev, now = Date.now(), max = RATE_MAX, windo
 /**
  * v235: «Confirmado (por Gustavo)». En el Autoservicio, el organizador que
  * aceptó la anotación. Si lo anotó un organizador, ese organizador.
- * Una anotación del Autoservicio aceptada antes de v235 no guarda quién la
- * aceptó: queda «Confirmado» solo, sin adivinar.
+ * v259: si la fila no guarda quién la aceptó, el organizador del link con el que
+ * se anotó (signedUpWithName, si no addedBy). Al pasar de la lista de espera se
+ * guarda quién lo pasó (promotedByPatch en js/store.js).
  */
 export function confirmedLabel(player) {
   let name = '';
-  if (player?.selfSignup === true) name = String(player?.acceptedBy || '');
+  // v259: sin acceptedBy (aceptado antes de v235 o lugar soltado por un «Sí» antes
+  // de v259), el organizador del link con el que se anotó.
+  if (player?.selfSignup === true) name = String(player?.acceptedBy || player?.signedUpWithName || player?.addedBy || '');
   else if (player?.guestAuto !== true) name = String(player?.signedUpWithName || player?.addedBy || '');
   const first = organizerFirstName(name);
   return first ? `Confirmado (por ${first})` : 'Confirmado';

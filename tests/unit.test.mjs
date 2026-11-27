@@ -41,7 +41,7 @@ import {
   attendanceMessage, cancelLinks, cancelMessage, confirmPageUrl, confirmSlotText, confirmStatus, confirmSummary, confirmationAllowed, confirmationIdentity, confirmationRecord, matchesCrossingReminderWindow,
   sharedConfirmAnswer, upcomingConfirmSlots, visibleConfirmSlots,
   needsReminderBanner, newConfirmToken, overlayConfirmations, playersForOrganizer, promotionMessage, reminderAudience, reminderLinks, reminderMessage, unconfirmedForReminder,
-  reservationClearedByAnswer, waReminderUrl, withinReminderWindow,
+  waReminderUrl, withinReminderWindow,
 } from '../js/reminders.js';
 import { confirmTarget, isShortCode, newShortCode, shortConfirmUrl } from '../js/short.js';
 import { TEXT_SIZE_DEFAULT, TEXT_SIZES, indexFromStored, readTextSize, stepTextSize, textSizeIndex } from '../js/text-size.js';
@@ -1201,13 +1201,12 @@ test('aviso al subir de la espera y lugar reservado', () => {
     confirmUrl: url,
   });
   assert.match(cinco, /en el fútbol 5 en Polideportivo Colegiales/);
-  assert.equal(reservationClearedByAnswer({ tentative: true, confirmed: 'si' }), true);
-  assert.equal(reservationClearedByAnswer({ tentative: true, confirmed: 'no' }), false);
-  assert.equal(reservationClearedByAnswer({ confirmed: 'si' }), false);
   const held = confirmStatus({ tentative: true, confirmed: 'si' });
   assert.equal(held.text, 'Reservado · a confirmar');
   assert.equal(held.cls, 'reserved');
-  assert.equal(held.note, undefined);
+  // v259: el sí del link no suelta el lugar; queda como dato.
+  assert.equal(held.note, 'Respondió que juega');
+  assert.equal(held.said, 'si');
   const declined = confirmStatus({ tentative: true, confirmed: 'no' });
   assert.equal(declined.note, 'No juega · se puede liberar el lugar');
   assert.equal(confirmStatus({ confirmed: 'si' }).text, '✅ Confirmó');
@@ -4046,7 +4045,7 @@ test('el error del backup nombra la colección y el documento', () => {
   const app = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
   const css = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
   const version = sw.match(/const VERSION = '([^']+)'/)[1];
-  assert.equal(version, 'f7c-v258');
+  assert.equal(version, 'f7c-v259');
   assert.equal(/\b(?:confirm|alert|prompt)\s*\(/.test(app), false);
   assert.match(app, /class="slot-actions">\$\{wa\}\$\{pay\}/);
   assert.match(css, /#slots \.slot-actions \{ display: flex; flex-direction: column/);

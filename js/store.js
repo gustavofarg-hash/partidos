@@ -512,6 +512,17 @@ export function acceptedByPatch(player, actor, opts = {}) {
   return name ? { acceptedBy: name } : {};
 }
 
+/**
+ * v259: quién lo pasó de la lista de espera al partido. El organizador que lo
+ * pasó a mano, o el que hizo lo que lo subió solo (bajar a otro, «no jugó pero
+ * pagó»). En el Autoservicio sale «Confirmado (por …)» con ese nombre.
+ */
+export function promotedByPatch(player, actor) {
+  if (player?.waiting !== true) return {};
+  const name = String(actor?.name || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+  return name ? { acceptedBy: name } : {};
+}
+
 function selfSignupDetail(player, waiting) {
   if (player?.selfSignup === true && player?.tentative === true) return 'Pendiente de confirmación';
   if (waiting && player?.selfSignup === true) return 'Se anotó solo en la lista de espera';
@@ -1528,7 +1539,7 @@ class LocalStore {
   async promoteFromWaiting(id) {
     const before = this._load().players[id];
     const wasWaiting = before?.waiting === true;
-    await this.updatePlayer(id, { waiting: false, waitOrder: null, rosterAt: Date.now() });
+    await this.updatePlayer(id, { waiting: false, waitOrder: null, rosterAt: Date.now(), ...promotedByPatch(before, this._actor()) });
     if (!wasWaiting) return;
     const db = this._load();
     const row = db.players[id];
@@ -5131,7 +5142,7 @@ export class FirebaseStore {
   async promoteFromWaiting(id) {
     const cur = this.state.players.find((player) => player.id === id);
     const wasWaiting = cur?.waiting === true;
-    await this.updatePlayer(id, { waiting: false, waitOrder: null, rosterAt: Date.now() });
+    await this.updatePlayer(id, { waiting: false, waitOrder: null, rosterAt: Date.now(), ...promotedByPatch(cur, this._actor()) });
     if (!wasWaiting || !cur) return;
     const match = this.state.matches.find((item) => item.id === cur.matchId);
     const mates = this.state.players.filter((item) => item.matchId === cur.matchId);

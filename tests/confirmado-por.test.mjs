@@ -12,7 +12,8 @@ test('confirmado por: quién aceptó, quién lo anotó, o «Confirmado» solo', 
   assert.equal(confirmedLabel({ selfSignup: true, acceptedBy: 'Gustavo Fernández', signedUpWithName: 'Martín' }), 'Confirmado (por Gustavo)');
   assert.equal(confirmedLabel({ selfSignup: true, acceptedBy: '  Gus  ' }), 'Confirmado (por Gus)');
   // Aceptado antes de v235: no se sabe quién fue. No se adivina con el dueño del enlace.
-  assert.equal(confirmedLabel({ selfSignup: true, signedUpWithName: 'Gustavo', addedBy: 'Gustavo' }), 'Confirmado');
+  // v259: sin acceptedBy, el organizador del link (antes «Confirmado» solo).
+  assert.equal(confirmedLabel({ selfSignup: true, signedUpWithName: 'Gustavo', addedBy: 'Gustavo' }), 'Confirmado (por Gustavo)');
   // Lo anotó un organizador: ese organizador.
   assert.equal(confirmedLabel({ signedUpWithName: 'Martín López', addedBy: 'Gustavo' }), 'Confirmado (por Martín)');
   assert.equal(confirmedLabel({ addedBy: 'Gustavo' }), 'Confirmado (por Gustavo)');
@@ -55,7 +56,8 @@ test('confirmado por: en el demo, Confirmar guarda al organizador y el jugador l
   store.actor = { uid: 'martin', name: 'Martín López' };
   await store.confirmSelf(anaId);
   assert.equal(db().players[anaId].acceptedBy, 'Martín López');
-  // La reserva que se libera sola (respondió «Sí, juego») no inventa quién aceptó.
+  // Soltar la reserva sin «Confirmar lugar» no inventa quién aceptó (v259: el «Sí»
+  // del link ya no la suelta; la fila muestra al organizador del link).
   await store.clearTentative(betoId);
   assert.equal('acceptedBy' in db().players[betoId], false);
   const players = Object.entries(db().players).map(([id, p]) => ({ id, ...p }));
@@ -63,7 +65,7 @@ test('confirmado por: en el demo, Confirmar guarda al organizador y el jugador l
   const [ana] = selfSignupRows({ person: { id: rosterId, name: 'Ana Sola', holders: ['gustavo'] }, matches, players, now: early });
   assert.equal(ana.note, 'Confirmado (por Martín)');
   const [beto] = selfSignupRows({ person: { id: otherId, name: 'Beto Solo', holders: ['gustavo'] }, matches, players, now: early });
-  assert.equal(beto.note, 'Confirmado');
+  assert.equal(beto.note, 'Confirmado (por Gustavo)');
   // Confirmar dos veces no pisa al primero.
   store.actor = { uid: 'gustavo', name: 'Gustavo' };
   await store.confirmSelf(anaId);

@@ -13,7 +13,7 @@ import { moveWaiting, nextWaitOrder, overflowPatches, rosterSplit, sortWaiting }
 import {
   attendanceMessage, cancelLinks, confirmPageUrl, confirmStatus, confirmSummary, matchesCrossingReminderWindow, upcomingConfirmSlots,
   needsReminderBanner, playersForOrganizer, promotionMessage, reminderDueAt, reminderLinks, reminderProgress, unconfirmedForReminder,
-  reservationClearedByAnswer, withAgendaPhones,
+  withAgendaPhones,
 } from './reminders.js';
 import { PRIVATE_WA_TEXT } from './privacy.js';
 import { playerMoreItems, playerShareTarget } from './player-more.js';
@@ -54,7 +54,7 @@ import {
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v258';
+const APP_VERSION = 'f7c-v259';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -2574,8 +2574,8 @@ function confirmTag(p) {
   const s = confirmStatus(p);
   if (!s) return '';
   if (p?.tentative === true) {
-    const note = s.note ? `<span class="reserved-free">${esc(s.note)}</span>` : '';
-    return `<span class="reserved-badge${s.note ? ' declined' : ''}">${esc(s.text)}</span>${note}`;
+    const note = s.note ? `<span class="${s.said === 'si' ? 'reserved-said' : 'reserved-free'}">${esc(s.note)}</span>` : '';
+    return `<span class="reserved-badge${s.note && s.said !== 'si' ? ' declined' : ''}">${esc(s.text)}</span>${note}`;
   }
   return `<span class="confirm-tag ${s.cls}">${s.text}</span>`;
 }
@@ -9294,7 +9294,7 @@ async function boot() {
   }
   onStoreView = (view) => {
     const { matches, players, roster, rosterError, organizers, organizersError, venues, venuesError, prices, pricesError, credits, creditsError, history, historyMeta, historyError } = view;
-    app.matches = applyScoreHold(matches || []); app.players = applyAttendanceHold(applyGoalHold(releaseAnsweredReservations(players || [])));
+    app.matches = applyScoreHold(matches || []); app.players = applyAttendanceHold(applyGoalHold(players || []));
     app.pendingWrites = view.pending === true;
     app.fromCache = view.fromCache === true;
     app.history = history || [];
@@ -9386,24 +9386,9 @@ async function boot() {
 let reminderSeenAt = Date.now();
 let reminderTimer = 0;
 let reminderTimerAt = Infinity;
-const clearingReservation = new Set();
-
-function releaseAnsweredReservations(players) {
-  if (!app.session?.user) return players || [];
-  return players.map((p) => {
-    if (!reservationClearedByAnswer(p)) {
-      clearingReservation.delete(p.id);
-      return p;
-    }
-    if (!clearingReservation.has(p.id)) {
-      clearingReservation.add(p.id);
-      Promise.resolve(app.store.clearTentative(p.id)).catch((e) => {
-        console.error(e);
-      });
-    }
-    return { ...p, tentative: null, tentativeAt: null };
-  });
-}
+// v259: el «Sí, juego» del link es solo informativo. Un lugar pendiente (reservado
+// por el organizador o anotado por Autoservicio) sigue pendiente hasta que un
+// organizador toca «Confirmar lugar»; ya no se suelta solo al llegar el sí.
 
 function armReminderTimer() {
   const now = Date.now();
