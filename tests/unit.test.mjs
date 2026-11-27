@@ -3420,7 +3420,7 @@ test('el enlace de un organizador solo muestra sus partidos y la anotación es d
     admin: true,
     matches: [{ id: 'ma', createdByUid: 'martin' }],
     players: [{ id: '2', matchId: 'ma', tentative: true, selfSignup: true, addedByUid: 'martin', createdAt: 1 }],
-  }).length, 1);
+  }).length, 0, 'v260: el admin tampoco ve las del link de otro');
   const mem = new Map();
   globalThis.localStorage = {
     getItem: (k) => (mem.has(k) ? mem.get(k) : null),
@@ -4045,7 +4045,7 @@ test('el error del backup nombra la colección y el documento', () => {
   const app = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
   const css = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
   const version = sw.match(/const VERSION = '([^']+)'/)[1];
-  assert.equal(version, 'f7c-v259');
+  assert.equal(version, 'f7c-v260');
   assert.equal(/\b(?:confirm|alert|prompt)\s*\(/.test(app), false);
   assert.match(app, /class="slot-actions">\$\{wa\}\$\{pay\}/);
   assert.match(css, /#slots \.slot-actions \{ display: flex; flex-direction: column/);

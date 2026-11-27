@@ -171,7 +171,29 @@ export function selfSignupRows({ person, matches, players, now = Date.now(), org
     });
 }
 
-/** Pendientes de este organizador, el más nuevo primero. Sin dueño, lo ve cualquiera. */
+/**
+ * v260: el organizador del link de Autoservicio con el que se anotó (el que
+ * recibe el aviso). Vacío si la fila no lo guarda.
+ */
+export function linkOrganizerUid(player) {
+  return String(player?.addedByUid || player?.signedUpWith || '').trim();
+}
+
+/**
+ * v260: «Confirmar lugar». Una anotación pendiente del Autoservicio la confirma
+ * solo el organizador del link (el admin también, solo las suyas). Un lugar
+ * reservado por un organizador, o una fila sin organizador del link, como antes.
+ */
+export function canConfirmSpot(player, uid) {
+  if (!isSelfPending(player)) return true;
+  const link = linkOrganizerUid(player);
+  return !link || link === String(uid || '');
+}
+
+/**
+ * Pendientes de este organizador, el más nuevo primero. Sin dueño, lo ve cualquiera.
+ * v260: las del link de otro organizador no las ve nadie más, tampoco el admin.
+ */
 export function pendingSelfSignups({ players, matches, uid, admin = false } = {}) {
   const byId = new Map((matches || []).filter((match) => match?.id).map((match) => [match.id, match]));
   return (players || [])
@@ -180,7 +202,7 @@ export function pendingSelfSignups({ players, matches, uid, admin = false } = {}
     .filter(({ player, match }) => {
       if (!match || match.cancelled === true) return false;
       const forUid = String(player.addedByUid || '').trim();
-      if (forUid) return admin === true || forUid === String(uid || '');
+      if (forUid) return forUid === String(uid || '');
       const owners = [];
       if (match.createdByUid) owners.push(String(match.createdByUid));
       for (const id of match.adders || []) if (id && id !== '*') owners.push(String(id));

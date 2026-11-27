@@ -7,7 +7,7 @@ const { initializeApp } = require('firebase-admin/app');
 const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 const { getMessaging } = require('firebase-admin/messaging');
 const crypto = require('crypto');
-const { pushCopy, organizerUids, pushFields, actionDecision, ACTION_TTL_MS } = require('./logic');
+const { pushCopy, organizerUids, pushFields, actionDecision, ACTION_TTL_MS, recipientGroups, decisionWrites } = require('./logic');
 
 initializeApp();
 
@@ -80,33 +80,35 @@ exports.notifySelfSignup = onDocumentCreated(
       const found = await db.collection('organizerTokens').where('uid', 'in', slice).get();
       found.forEach((doc) => {
         const token = String(doc.data()?.token || '');
-        if (token) tokens.push({ token, ref: doc.ref });
+        if (token) tokens.push({ token, uid: String(doc.data()?.uid || ''), ref: doc.ref });
       });
     }
     const project = cloudProject();
     const copy = pushCopy(ping.kind, { name: ping.name }, match, project);
-    let actionToken = '';
     const playerId = String(ping.playerId || '');
-    if (ping.kind === 'alta' && playerId) {
-      actionToken = crypto.randomBytes(32).toString('hex');
-      await db.doc(`signupActions/${actionToken}`).set({
-        playerId,
-        matchId: ping.matchId,
-        used: false,
-        createdAt: Date.now(),
-        expiresAt: Date.now() + ACTION_TTL_MS,
-      });
-    }
-    if (tokens.length) {
+    // v260: un token de Aceptar/Rechazar por organizador, con su uid, para saber quién tocó.
+    for (const group of recipientGroups(uids, tokens)) {
+      let actionToken = '';
+      if (ping.kind === 'alta' && playerId) {
+        actionToken = crypto.randomBytes(32).toString('hex');
+        await db.doc(`signupActions/${actionToken}`).set({
+          playerId,
+          matchId: ping.matchId,
+          uid: group.uid,
+          used: false,
+          createdAt: Date.now(),
+          expiresAt: Date.now() + ACTION_TTL_MS,
+        });
+      }
       const res = await getMessaging().sendEachForMulticast({
-        tokens: tokens.map((row) => row.token),
+        tokens: group.rows.map((row) => row.token),
         data: pushFields(ping.kind, copy, { actionToken, playerId, tag: `signup-${event.params.pingId}`, project }),
       });
       const dead = [];
       res.responses.forEach((row, index) => {
         const code = row.error?.code || '';
         if (code === 'messaging/registration-token-not-registered' || code === 'messaging/invalid-registration-token') {
-          dead.push(tokens[index].ref.delete().catch(() => {}));
+          dead.push(group.rows[index].ref.delete().catch(() => {}));
         }
       });
       await Promise.all(dead);
@@ -154,11 +156,17 @@ exports.decideSignup = onRequest({ region: 'southamerica-east1', cors: true, inv
       const player = playerSnap?.exists ? { id: action.playerId, ...playerSnap.data() } : null;
       const result = actionDecision(action, player, decision, Date.now(), spotsLeft);
       if (!result.ok) return result;
+      // v260: el organizador que recibió este aviso (el token es suyo).
+      const orgUid = String(action?.uid || '').trim();
+      const orgSnap = orgUid ? await tx.get(db.doc(`users/${orgUid}`)) : null;
+      const writes = decisionWrites(action, decision, orgSnap?.exists ? orgSnap.data()?.name : '', Date.now());
       tx.update(actionRef, { used: true, usedAt: Date.now(), decision });
       if (result.op === 'delete') tx.delete(playerRef);
-      else tx.update(playerRef, { tentative: null, tentativeAt: null, updatedAt: Date.now() });
+      else tx.update(playerRef, writes.playerPatch);
       return {
         ...result,
+        actorUid: writes.actorUid,
+        actorName: writes.actorName,
         matchId: player.matchId,
         confirmToken: player.confirmToken || '',
         playerName: player.name || '',
@@ -184,8 +192,8 @@ exports.decideSignup = onRequest({ region: 'southamerica-east1', cors: true, inv
       const when = [match.date || '', match.time || ''].filter(Boolean).join(' · ');
       await db.collection('log').add({
         at: Date.now(),
-        actorUid: 'aviso',
-        actorName: 'Desde el aviso',
+        actorUid: outcome.actorUid || 'aviso',
+        actorName: outcome.actorName || 'Desde el aviso',
         section: 'partidos',
         type: decision === 'aceptar' ? 'aceptó' : 'rechazó',
         matchId: outcome.matchId,
