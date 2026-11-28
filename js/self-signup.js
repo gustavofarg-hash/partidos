@@ -85,6 +85,24 @@ export function confirmedLabel(player) {
   return first ? `Confirmado (por ${first})` : 'Confirmado';
 }
 
+/** Sufijo « (auto)» si el jugador se anotó por Autoservicio (`selfSignup`). */
+export function signedUpAutoMark(player) {
+  return player?.selfSignup === true ? ' (auto)' : '';
+}
+
+/** Tag y aviso del menú: «Se anotó con: Gus (auto)». Vacío si no hay nombre. */
+export function signedUpWithLine(player) {
+  const name = String(player?.signedUpWithName || '').trim();
+  if (!name) return '';
+  return `Se anotó con: ${name}${signedUpAutoMark(player)}`;
+}
+
+/** Etiqueta del campo «Se anotó con»; el sufijo no entra en las opciones del select. */
+export function signedUpWithFieldLabel(player) {
+  return `Se anotó con:${signedUpAutoMark(player)}`;
+}
+
+
 /**
  * Qué muestra la fila. join = Anotarme, wait = Lista de espera,
  * cancel = Anular, locked = ya no se puede bajar solo.
