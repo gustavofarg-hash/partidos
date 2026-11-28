@@ -4045,7 +4045,7 @@ test('el error del backup nombra la colección y el documento', () => {
   const app = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
   const css = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
   const version = sw.match(/const VERSION = '([^']+)'/)[1];
-  assert.equal(version, 'f7c-v260');
+  assert.equal(version, 'f7c-v261');
   assert.equal(/\b(?:confirm|alert|prompt)\s*\(/.test(app), false);
   assert.match(app, /class="slot-actions">\$\{wa\}\$\{pay\}/);
   assert.match(css, /#slots \.slot-actions \{ display: flex; flex-direction: column/);
@@ -4069,10 +4069,11 @@ test('el enlace pide los partidos de ese organizador, sábado incluido', async (
     where(field, op, value) { return { field, op, value }; },
     orderBy(field, dir) { return { orderBy: field, dir }; },
     limit(n) { return { limit: n }; },
-    onSnapshot(ref, next) {
+    onSnapshot(ref, nextOrOpts, maybeNext) {
+      const next = typeof nextOrOpts === 'function' ? nextOrOpts : maybeNext;
       calls.push(ref);
       queueMicrotask(() => {
-        if (String(ref.path).startsWith('shareTokens/')) next({ exists: () => true, id: 'tokendegustavolargo1234', data: () => ({ uid: 'gus', name: 'Gustavo' }) });
+        if (String(ref.path).startsWith('shareTokens/')) next({ exists: () => true, id: 'tokendegustavolargo1234', data: () => ({ uid: 'gus', name: 'Gustavo' }), metadata: { fromCache: false } });
         else if (String(ref.path).startsWith('roster/')) next({ exists: () => true, id: 'ficha', data: () => ({ name: 'Jeremi' }) });
         else next({ docs: [], metadata: { fromCache: false } });
       });

@@ -126,6 +126,24 @@ export function guestMatchForOrganizer(match, { uid = '' } = {}) {
 }
 
 /** Partido de este organizador: lo creó él, o está en quienes anotan (no el comodín *). */
+/** v261: un snapshot del token del link. La caché que dice «no está» no es definitiva. */
+export function shareTokenSnapshotState({ exists = false, fromCache = false, uid = '' } = {}) {
+  if (String(uid || '').trim()) return 'ready';
+  if (fromCache === true) return 'pending';
+  return 'missing';
+}
+
+/** v261: con token en el link, no se muestra la lista hasta saber el organizador. */
+export function guestLinkSignupState({ token = '', organizer = null, shareError = '' } = {}) {
+  if (!String(token || '').trim()) return 'ready';
+  if (organizer?.uid) return 'ready';
+  if (shareError) return 'error';
+  return 'loading';
+}
+
+export const SHARE_TOKEN_WAIT_MS = 12_000;
+export const SHARE_TOKEN_LOAD_ERROR = 'No se pudieron cargar los partidos.';
+
 export function matchOwnedBy(match, uid) {
   const id = String(uid || '').trim();
   if (!id || !match) return false;

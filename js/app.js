@@ -40,9 +40,9 @@ import { compensationFingerprint, dayCompensation, reconcileTransfers, splitMode
 import { balanceTeams, bumpGoals, bumpScore, dropPlayerOn, emptyTeams, goaliesLeft, movePlayer, normalizeScore, normalizeTeams, orderTeamsByGoal, teamDragDrop, teamsBalance, teamsMessage } from './teams.js';
 import { appInstallUrl, appShareMessage, isPlayerDeepLink, organizerMatchesTitle, playerLink } from './share.js';
 import { isTrialPage } from './trial.js';
-import { canConfirmSpot, isSelfPending, pendingSelfSignups, selfSignupRows, signupLimitFrom, signupLimitRecord } from './self-signup.js';
+import { canConfirmSpot, guestLinkSignupState, isSelfPending, pendingSelfSignups, selfSignupRows, SHARE_TOKEN_LOAD_ERROR, signupLimitFrom, signupLimitRecord } from './self-signup.js';
 import { confirmBannerText, confirmWhatsAppText, unseenConfirmations } from './confirm-notice.js';
-import { iosPushHint, playerPushAvailable, registerOrganizerPush, registerPlayerPush } from './push.js';
+import { iosPushHint, playerPushAvailable, playerPushDeniedNotice, registerOrganizerPush, registerPlayerPush } from './push.js';
 import { bindTap, tapChose } from './tap.js';
 import { SHORTCUT_DOUBLE_MS, shortcutHash, shortcutMatch } from './shortcut.js';
 import { mergeById, monthIsReady, shiftMonth, statsRangesFor, yearMonths } from './stats-range.js';
@@ -54,7 +54,7 @@ import {
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v260';
+const APP_VERSION = 'f7c-v261';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -1060,6 +1060,8 @@ let onStoreView = () => {};
 async function bootGuestPlayer() {
   lockShell();
   document.documentElement.classList.add('anon-lock');
+  // v261: «Cargando…» de entrada, hasta saber el organizador del link.
+  showGuestLoading();
   app.guestPlayer = true;
   const id = route().id;
   const share = route().share || '';
@@ -1250,9 +1252,16 @@ function render() {
       if (!app.loaded) return;
       const id = route().id;
       const person = (app.roster || []).find((row) => row.id === id);
-      // v247: hasta saber si el organizador del link (o el de algún partido) lo suspendió,
+      // v261: si el token no se pudo leer, el error se muestra aunque guestReady
+      // siga en falso (los partidos nunca se piden). v247: si todavía se espera,
       // solo «Cargando…»: la lista no aparece ni un instante.
-      if (app.guestReady === false) { showGuestLoading(); return; }
+      const linkState = guestLinkSignupState({
+        token: route().share || '',
+        organizer: linkOrganizer(),
+        shareError: app.guestShareError,
+      });
+      if (linkState === 'error') { showGuestShareError(); return; }
+      if (linkState === 'loading' || app.guestReady === false) { showGuestLoading(); return; }
       if (app.store?.linkInvalid === true) showLinkInvalid();
       else if (person) renderPlayerSignup(person);
       else showAnonymousDenial();
@@ -5296,8 +5305,19 @@ function renderPlayerSignup(person) {
     showAnonymousDenial();
     return;
   }
-  if (app.guestReady === false) { showGuestLoading(); return; }
-  if (app.guestAccessError) { showGuestAccessError(); return; }
+  // v261: si el token falló, el aviso va antes de «Cargando…» (guestReady puede seguir en falso).
+  // Con sesión no aplica: el organizador no espera el token del link.
+  if (!app.session?.user) {
+    const linkState = guestLinkSignupState({
+      token: route().share || '',
+      organizer: linkOrganizer(),
+      shareError: app.guestShareError,
+    });
+    if (linkState === 'error') { showGuestShareError(); return; }
+    if (linkState === 'loading') { showGuestLoading(); return; }
+    if (app.guestReady === false) { showGuestLoading(); return; }
+    if (app.guestAccessError) { showGuestAccessError(); return; }
+  }
   document.documentElement.classList.add('anon-lock');
   app.store?.watchConfirmSeen?.(person.id);
   const list = selfSignupSection(person);
@@ -5356,7 +5376,8 @@ function bindConfirmNotices(person) {
 function playerPushHtml() {
   if (!playerPushAvailable()) return '';
   const hint = iosPushHint();
-  return `<div class="player-push"><button type="button" class="btn" id="player-push">Avisarme cuando me confirmen</button>${hint ? `<p class="player-push-hint" id="player-push-ios">${esc(hint)}</p>` : ''}<p class="player-push-hint" id="player-push-msg" hidden></p></div>`;
+  const denied = playerPushDeniedNotice();
+  return `<div class="player-push"><button type="button" class="btn" id="player-push">Avisarme cuando me confirmen</button>${hint ? `<p class="player-push-hint" id="player-push-ios">${esc(hint)}</p>` : ''}<p class="player-push-hint" id="player-push-msg"${denied ? '' : ' hidden'}>${denied ? esc(denied) : ''}</p></div>`;
 }
 
 function bindPlayerPush(person) {
@@ -5375,7 +5396,7 @@ function bindPlayerPush(person) {
       btn.disabled = false;
       if (!msg) return;
       msg.hidden = false;
-      msg.textContent = result.reason === 'denied' ? 'El navegador no dejó mostrar avisos.' : 'No se pudo activar el aviso.';
+      msg.textContent = result.reason === 'denied' ? (playerPushDeniedNotice('denied') || 'El navegador no deja mostrar avisos.') : 'No se pudo activar el aviso.';
     } catch (error) {
       btn.disabled = false;
       if (!msg) return;
@@ -9135,13 +9156,20 @@ function syncTextSize() {
 function showGuestLoading() {
   document.documentElement.classList.add('anon-lock');
   if ($('#player-loading')) return;
-  replaceView('<div class="loading" id="player-loading">Cargando…</div>');
+  replaceView('<div id="player-loading">Cargando…</div>');
 }
 /** v247: no se pudo saber si el organizador del link lo suspendió: ni lista ni «NO TENÉS ACCESO». */
 function showGuestAccessError() {
   document.documentElement.classList.add('anon-lock');
   replaceView(`<div class="anon-lock" id="player-check-error"><p><b>No pudimos cargar tus partidos.</b></p><p class="hint">Revisá la conexión y probá de nuevo.</p><p><button type="button" class="btn primary" id="player-check-retry">Reintentar</button></p></div>`);
   const btn = $('#player-check-retry');
+  if (btn) btn.onclick = () => { location.reload(); };
+}
+/** v261: no se pudo saber el organizador del link de Autoservicio. */
+function showGuestShareError() {
+  document.documentElement.classList.add('anon-lock');
+  replaceView(`<div class="anon-lock" id="player-share-error"><p><b>${esc(SHARE_TOKEN_LOAD_ERROR)}</b></p><p><button type="button" class="btn primary" id="player-share-retry">Reintentar</button></p></div>`);
+  const btn = $('#player-share-retry');
   if (btn) btn.onclick = () => { location.reload(); };
 }
 function showAnonymousDenial() {
@@ -9342,6 +9370,7 @@ async function boot() {
     app.creditsReady = view.creditsReady === true;
     app.playersReady = view.playersReady === true;
     if (app.guestPlayer) app.shareOrganizer = view.shareOrganizer || null;
+    app.guestShareError = view.guestShareError || '';
     app.guestMatchError = view.guestMatchError || '';
     // v247: la página del jugador espera a saber si lo suspendieron antes de mostrar partidos.
     app.guestReady = view.guestReady !== false;
@@ -9366,7 +9395,7 @@ async function boot() {
     if (!app.guestPlayer && pricesError && pricesError !== app.pricesError) showError(adminOnlyDetail(pricesError, isAdminUser()));
     app.pricesError = pricesError || null;
     app.loaded = true;
-    const stamp = JSON.stringify([app.matches, app.players, app.history, app.historyMeta, app.historyError, app.historyHasMore, app.historyLoading, app.rosterWatch, app.rosterCovered, app.rosterDates, app.roster, app.suspensions, app.suspensionHistory, app.payBatches, app.behavior, app.organizers, app.venues, app.prices, app.credits, app.compensations, app.log, app.logError, app.rosterError, app.organizersError, app.venuesError, app.pricesError, app.creditsError, app.confirmSeen, app.guestMatchError, app.statsMatches, app.statsPlayers, app.statsLoading, app.statsError, app.guestBlocked, app.guestReady, app.guestAccessError, app.guestHiddenError, app.rosterReady, app.matchesReady, app.historyReady, app.logReady]);
+    const stamp = JSON.stringify([app.matches, app.players, app.history, app.historyMeta, app.historyError, app.historyHasMore, app.historyLoading, app.rosterWatch, app.rosterCovered, app.rosterDates, app.roster, app.suspensions, app.suspensionHistory, app.payBatches, app.behavior, app.organizers, app.venues, app.prices, app.credits, app.compensations, app.log, app.logError, app.rosterError, app.organizersError, app.venuesError, app.pricesError, app.creditsError, app.confirmSeen, app.guestMatchError, app.statsMatches, app.statsPlayers, app.statsLoading, app.statsError, app.guestBlocked, app.guestReady, app.guestAccessError, app.guestHiddenError, app.guestShareError, app.shareOrganizer, app.rosterReady, app.matchesReady, app.historyReady, app.logReady]);
     const changed = stamp !== app.viewStamp;
     app.viewStamp = stamp;
     scheduleRetroactiveAutoCredit();
