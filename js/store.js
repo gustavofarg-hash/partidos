@@ -98,7 +98,7 @@ import { creditDocId, nextCredit } from './credit.js';
 import { MAX_PRICE } from './prices.js';
 import { PRICES_DENIED_READ, priceRecord } from './prices.js';
 import { nextWaitOrder } from './waiting.js';
-import { canSelfCancel, isSelfPending, occupiesSpot, selfDropEntry, selfDropPenalty, SHARE_TOKEN_LOAD_ERROR, SHARE_TOKEN_WAIT_MS, shareTokenSnapshotState, signupLimitFrom, signupLimitRecord, signupRateDecision } from './self-signup.js';
+import { canSelfCancel, isSelfPending, occupiesSpot, selfDropEntry, selfDropPenalty, SHARE_TOKEN_LOAD_ERROR, SHARE_TOKEN_LOOKUP_MS, SHARE_TOKEN_WAIT_MS, fetchFirestoreRestDocument, fetchFirestoreRestQuery, fetchShareTokenRest, resolveShareTokenAfterWait, shareTokenFromServerSnap, shareTokenSnapshotState, signupLimitFrom, signupLimitRecord, signupRateDecision, withLookupTimeout } from './self-signup.js';
 import { tokenDocId } from './push.js';
 import { newShareToken } from './share.js';
 import { canResetLink, isLinkKey, linkKeyTargets, newLinkKey, rosterMirror, sameMirror } from './link-reset.js';
@@ -173,6 +173,14 @@ function saveBackfillIds(ids) {
   } catch { /* modo privado */ }
 }
 
+/** Caché persistente + long polling si el WebChannel/Listen no pasa. */
+export function firestoreInitSettings(fs) {
+  return {
+    localCache: fs.persistentLocalCache({ tabManager: fs.persistentMultipleTabManager() }),
+    experimentalAutoDetectLongPolling: true,
+  };
+}
+
 export async function initFirebase() {
   if (blocksProductionFirebase(pagePath(), firebaseConfig.projectId)) {
     throw new Error('La versión de prueba no puede usar el Firebase de producción');
@@ -197,9 +205,14 @@ export async function initFirebase() {
   const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
   let db;
   try {
-    db = fs.initializeFirestore(app, { localCache: fs.persistentLocalCache({ tabManager: fs.persistentMultipleTabManager() }) });
+    db = fs.initializeFirestore(app, firestoreInitSettings(fs));
   } catch {
-    db = fs.getFirestore(app);
+    try {
+      // Si AutoDetect no entra, se mantiene la caché persistente.
+      db = fs.initializeFirestore(app, { localCache: fs.persistentLocalCache({ tabManager: fs.persistentMultipleTabManager() }) });
+    } catch {
+      db = fs.getFirestore(app);
+    }
   }
   if (testRun && emulatorHost && typeof fs.connectFirestoreEmulator === 'function') {
     const [host, portRaw] = String(emulatorHost).split(':');
@@ -2899,6 +2912,86 @@ export class FirebaseStore {
     if (plan.limit) parts.push(limit(plan.limit));
     return query(collection(this.db, plan.collection), ...parts);
   }
+  async _getShareTokenFromServer(token) {
+    const tok = String(token || '').trim();
+    if (!tok || !this.fs || !this.db) return { status: 'error' };
+    const { doc, getDoc } = this.fs;
+    const snap = await withLookupTimeout(getDoc(doc(this.db, 'shareTokens', tok), { source: 'server' }), SHARE_TOKEN_LOOKUP_MS);
+    return shareTokenFromServerSnap(snap);
+  }
+  async _getShareTokenFromRest(token) {
+    const tok = String(token || '').trim();
+    if (!tok) return { status: 'error' };
+    let wire;
+    try { wire = this._firestoreWire(); }
+    catch {
+      wire = {
+        projectId: firebaseConfig.projectId,
+        host: 'firestore.googleapis.com',
+        ssl: true,
+        apiKey: firebaseConfig.apiKey,
+        database: '(default)',
+      };
+    }
+    const ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = ac ? setTimeout(() => ac.abort(), SHARE_TOKEN_LOOKUP_MS) : 0;
+    try {
+      return await fetchShareTokenRest({
+        host: wire.host,
+        ssl: wire.ssl,
+        projectId: wire.projectId,
+        database: wire.database,
+        apiKey: wire.apiKey,
+        token: tok,
+        signal: ac?.signal,
+      });
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+  _guestRestWire() {
+    const testRun = (typeof process !== 'undefined' && process.env && process.env.NODE_TEST_CONTEXT)
+      || (typeof globalThis !== 'undefined' && globalThis.__F7C_TEST);
+    const emulatorHost = (typeof globalThis !== 'undefined' && globalThis.__F7C_EMULATOR_HOST)
+      || (typeof process !== 'undefined' && process.env && process.env.FIRESTORE_EMULATOR_HOST)
+      || '';
+    try {
+      const wire = this._firestoreWire();
+      if (testRun && !emulatorHost) throw new Error('Las pruebas no leen Firebase real. Usá el emulador.');
+      return wire;
+    } catch (error) {
+      if (testRun && !emulatorHost) throw error;
+      return {
+        projectId: firebaseConfig.projectId,
+        host: 'firestore.googleapis.com',
+        ssl: true,
+        apiKey: firebaseConfig.apiKey,
+        database: '(default)',
+      };
+    }
+  }
+  async _guestRestCall(run) {
+    const wire = this._guestRestWire();
+    const ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = ac ? setTimeout(() => ac.abort(), SHARE_TOKEN_LOOKUP_MS) : 0;
+    try {
+      return await run(wire, ac?.signal);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+  async _getGuestRestDocument(segments) {
+    return this._guestRestCall((wire, signal) => fetchFirestoreRestDocument({
+      host: wire.host, ssl: wire.ssl, projectId: wire.projectId, database: wire.database,
+      apiKey: wire.apiKey, segments, signal,
+    }));
+  }
+  async _getGuestRestQuery(plan) {
+    return this._guestRestCall((wire, signal) => fetchFirestoreRestQuery({
+      host: wire.host, ssl: wire.ssl, projectId: wire.projectId, database: wire.database,
+      apiKey: wire.apiKey, plan, signal,
+    }));
+  }
   _listenGuest(rosterId) {
     const id = String(rosterId || '').trim();
     if (!id || !this.fs) return;
@@ -3000,28 +3093,33 @@ export class FirebaseStore {
         publish();
       };
       this._swap('guest-matches', onSnapshot(this._queryFromPlan(plan.matches), onMatches, onMatchesError));
+      void this._primeGuestQuery(id, plan.matches, onMatches);
       if (plan.linkMatches) {
-        this._swap('guest-link-matches', onSnapshot(this._queryFromPlan(plan.linkMatches), (snap) => {
+        const onLinkMatches = (snap) => {
           this._guestBuckets.link = visible(snap);
           showMatches();
           this.state.guestMatchError = '';
           publish();
-        }, (error) => {
+        };
+        this._swap('guest-link-matches', onSnapshot(this._queryFromPlan(plan.linkMatches), onLinkMatches, (error) => {
           console.error(error?.code || 'sin-codigo', error);
           this._guestBuckets.link = [];
           showMatches();
         }));
+        void this._primeGuestQuery(id, plan.linkMatches, onLinkMatches);
       } else this._swap('guest-link-matches', null);
       if (plan.linkPlayers) {
-        this._swap('guest-link-players', onSnapshot(this._queryFromPlan(plan.linkPlayers), (snap) => {
+        const onLinkPlayers = (snap) => {
           this._guestBuckets.linkPlayers = rows(snap);
           showPlayers();
           if (seen.players) this._emit();
-        }, (error) => {
+        };
+        this._swap('guest-link-players', onSnapshot(this._queryFromPlan(plan.linkPlayers), onLinkPlayers, (error) => {
           console.error(error?.code || 'sin-codigo', error);
           this._guestBuckets.linkPlayers = [];
           showPlayers();
         }));
+        void this._primeGuestQuery(id, plan.linkPlayers, onLinkPlayers);
       } else this._swap('guest-link-players', null);
     };
     if (this._shareToken) {
@@ -3042,15 +3140,11 @@ export class FirebaseStore {
         // llega a guestReady. Hay que emitir igual para que se vea el error.
         this._emit();
       };
-      const applyShareSnap = (snap) => {
-        const data = snap.exists() ? snap.data() : null;
-        const uid = data?.uid ? String(data.uid) : '';
-        const fromCache = snap.metadata?.fromCache === true;
-        const state = shareTokenSnapshotState({ exists: snap.exists(), fromCache, uid });
-        if (state === 'pending') return;
-        if (state !== 'ready') { failShare(); return; }
+      const applyShareReady = (info) => {
+        const uid = String(info?.uid || '').trim();
+        if (!uid) return false;
         this.state.guestShareError = '';
-        this.state.shareOrganizer = { uid, name: String(data.name || ''), token: this._shareToken };
+        this.state.shareOrganizer = { uid, name: String(info.name || ''), token: this._shareToken };
         armMatches(uid);
         const done = () => {
           // v247: si no se pudo saber, ni la lista ni «NO TENÉS ACCESO»: un aviso para reintentar.
@@ -3060,6 +3154,27 @@ export class FirebaseStore {
           if (this.state.guestReady) this._emit();
         };
         void this._checkGuestBlocks([uid]).then(done, done);
+        return true;
+      };
+      const applyShareSnap = (snap) => {
+        const data = snap.exists() ? snap.data() : null;
+        const uid = data?.uid ? String(data.uid) : '';
+        const fromCache = snap.metadata?.fromCache === true;
+        const state = shareTokenSnapshotState({ exists: snap.exists(), fromCache, uid });
+        if (state === 'pending') return;
+        if (state !== 'ready') { failShare(); return; }
+        applyShareReady({ uid, name: data.name || '' });
+      };
+      const lookupShareAfterWait = async () => {
+        if (this._guestRosterId !== id || seen.share) return;
+        const token = String(this._shareToken || '');
+        const result = await resolveShareTokenAfterWait({
+          getFromServer: () => this._getShareTokenFromServer(token),
+          getFromRest: () => this._getShareTokenFromRest(token),
+        });
+        if (this._guestRosterId !== id || seen.share) return;
+        if (result.status === 'ready' && applyShareReady(result.data)) return;
+        failShare();
       };
       const queueShareSnap = (snap) => {
         this._pendingShareSnap = snap;
@@ -3084,7 +3199,7 @@ export class FirebaseStore {
       };
       this._shareWaitTimer = setTimeout(() => {
         if (this._guestRosterId !== id || seen.share) return;
-        failShare();
+        void lookupShareAfterWait();
       }, shareWaitMs);
       let shareTries = 0;
       const listenShare = () => {
@@ -3092,9 +3207,12 @@ export class FirebaseStore {
           console.error(error?.code || 'sin-codigo', error);
           shareTries += 1;
           if (shareTries < 2) { listenShare(); return; }
-          failShare();
+          void lookupShareAfterWait();
         }));
       };
+      if (typeof globalThis !== 'undefined' && globalThis.__F7C_SHARE_TEST_CACHE_MISS === true) {
+        queueShareSnap({ exists: () => false, data: () => null, metadata: { fromCache: true } });
+      }
       listenShare();
     } else {
       this.state.shareOrganizer = null;
@@ -3106,8 +3224,32 @@ export class FirebaseStore {
       seen.roster = true;
       publish();
     };
+    const applyRosterData = (data) => {
+      if (!data && linkKey) return false;
+      this.linkInvalid = false;
+      this.state.roster = data ? [{ id, ...data }] : [];
+      this.state.rosterError = null;
+      seen.roster = true;
+      publish();
+      return true;
+    };
+    const loadRosterFromServer = async () => {
+      try {
+        const { getDoc } = this.fs;
+        const snap = await withLookupTimeout(getDoc(rosterRef, { source: 'server' }), SHARE_TOKEN_LOOKUP_MS);
+        const data = snap.exists() ? snap.data() : null;
+        if (applyRosterData(data)) return true;
+      } catch { /* se prueba REST */ }
+      try {
+        const segments = linkKey ? ['rosterLinks', id, 'k', linkKey] : ['roster', id];
+        const result = await this._getGuestRestDocument(segments);
+        if (result.status === 'ready' && applyRosterData(result.data)) return true;
+      } catch { /* sigue el camino de link inválido */ }
+      return false;
+    };
     // Sin la ficha: si la ficha se reseteó, el link es viejo (o la clave no es la vigente).
     const rosterDenied = async () => {
+      if (await loadRosterFromServer()) return;
       try {
         const { getDoc } = this.fs;
         const flag = await getDoc(doc(this.db, 'rosterLinks', id));
@@ -3118,32 +3260,56 @@ export class FirebaseStore {
     const rosterRef = linkKey ? doc(this.db, 'rosterLinks', id, 'k', linkKey) : doc(this.db, 'roster', id);
     this._swap('guest-roster', onSnapshot(rosterRef, (snap) => {
       const data = snap.exists() ? snap.data() : null;
-      if (!data && linkKey) { void rosterDenied(); return; }
-      this.linkInvalid = false;
-      this.state.roster = data ? [{ id, ...data }] : [];
-      this.state.rosterError = null;
-      seen.roster = true;
-      publish();
+      const fromCache = snap.metadata?.fromCache === true;
+      // v263: un miss solo de la caché no es «sin ficha»; se pregunta al servidor/REST.
+      if (!data && (linkKey || fromCache)) { void rosterDenied(); return; }
+      applyRosterData(data);
     }, () => { void rosterDenied(); }));
+    void loadRosterFromServer();
     this._seenRoster = id;
-    this._swap('guest-seen', onSnapshot(this._queryFromPlan(plan.seen), (snap) => {
+    const onSeen = (snap) => {
       this.state.confirmSeen = snap.docs.filter((item) => item.data()?.seen === true).map((item) => item.id);
       if (seen.players) this._emit();
-    }, () => {
+    };
+    this._swap('guest-seen', onSnapshot(this._queryFromPlan(plan.seen), onSeen, () => {
       this.state.confirmSeen = [];
       if (seen.players) this._emit();
     }));
-    this._swap('guest-players', onSnapshot(this._queryFromPlan(plan.players), (snap) => {
+    if (plan.seen) void this._primeGuestQuery(id, plan.seen, onSeen);
+    const onOpenPlayers = (snap) => {
       this._guestBuckets.openPlayers = rows(snap);
       showPlayers();
       seen.players = true;
       publish();
-    }, () => {
+    };
+    this._swap('guest-players', onSnapshot(this._queryFromPlan(plan.players), onOpenPlayers, () => {
       this._guestBuckets.openPlayers = [];
       showPlayers();
       seen.players = true;
       publish();
     }));
+    if (plan.players) void this._primeGuestQuery(id, plan.players, onOpenPlayers);
+  }
+
+  async _primeGuestQuery(rosterId, plan, onSnap) {
+    if (!plan || typeof onSnap !== 'function') return;
+    const stillHere = () => this._guestRosterId === rosterId;
+    const rest = this._getGuestRestQuery(plan).then((result) => {
+      if (!stillHere() || result.status !== 'ready') return;
+      const docs = (result.data || []).map((row) => {
+        const { id, ...data } = row;
+        return { id, data: () => data };
+      });
+      onSnap({ docs });
+    }).catch(() => {});
+    try {
+      const { getDocs } = this.fs;
+      if (getDocs) {
+        const snap = await withLookupTimeout(getDocs(this._queryFromPlan(plan), { source: 'server' }), SHARE_TOKEN_LOOKUP_MS);
+        if (stillHere() && snap) onSnap(snap);
+      }
+    } catch { /* el REST sigue en paralelo */ }
+    await rest;
   }
   _listenUpcoming() {
     const today = this._queryDay || todayISO();
@@ -5736,19 +5902,26 @@ export class FirebaseStore {
     const wanted = [...new Set((uids || []).map((uid) => String(uid || '').trim()).filter(Boolean))];
     const ask = async (uid) => {
       const delay = (globalThis.__F7C_TEST && Number(globalThis.__F7C_FLAG_DELAY_MS)) || 0;
+      const flagId = suspendFlagId(id, uid);
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
           if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
           if (globalThis.__F7C_TEST && globalThis.__F7C_FLAG_FAIL) throw Object.assign(new Error('prueba'), { code: 'unavailable' });
-          const snap = await getDoc(doc(this.db, 'suspendFlags', suspendFlagId(id, uid)));
+          const snap = await getDoc(doc(this.db, 'suspendFlags', flagId));
           if (snap.exists()) return 'blocked';
           // Sin conexión, «no hay marca» puede ser viejo: no alcanza para mostrar la lista.
-          return snap.metadata?.fromCache === true ? 'error' : 'clear';
+          if (snap.metadata?.fromCache !== true) return 'clear';
         } catch (error) {
           console.error(error?.code || 'sin-codigo', error);
           if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 600));
         }
       }
+      // v263: si el Listen/getDoc no llega, la lectura REST decide si hay marca.
+      try {
+        const result = await this._getGuestRestDocument(['suspendFlags', flagId]);
+        if (result.status === 'ready') return 'blocked';
+        if (result.status === 'missing') return 'clear';
+      } catch { /* queda error */ }
       return 'error';
     };
     const waits = wanted.map((uid) => {
