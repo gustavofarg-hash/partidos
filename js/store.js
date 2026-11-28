@@ -98,7 +98,7 @@ import { creditDocId, nextCredit } from './credit.js';
 import { MAX_PRICE } from './prices.js';
 import { PRICES_DENIED_READ, priceRecord } from './prices.js';
 import { nextWaitOrder } from './waiting.js';
-import { canSelfCancel, isSelfPending, occupiesSpot, selfDropEntry, selfDropPenalty, signupLimitFrom, signupLimitRecord, signupRateDecision } from './self-signup.js';
+import { canSelfCancel, isSelfPending, occupiesSpot, selfDropEntry, selfDropPenalty, SHARE_TOKEN_LOAD_ERROR, SHARE_TOKEN_WAIT_MS, shareTokenSnapshotState, signupLimitFrom, signupLimitRecord, signupRateDecision } from './self-signup.js';
 import { tokenDocId } from './push.js';
 import { newShareToken } from './share.js';
 import { canResetLink, isLinkKey, linkKeyTargets, newLinkKey, rosterMirror, sameMirror } from './link-reset.js';
@@ -2151,7 +2151,7 @@ export class FirebaseStore {
     this._compUnscoped = false;
     this._named = {};
     this._unsubs = [];
-    this.state = { matches: [], players: [], roster: [], rosterNotes: {}, suspensions: [], suspensionHistory: [], payBatches: [], behavior: [], rosterError: null, organizers: [], organizersError: null, venues: [], venuesError: null, confirmations: [], prices: null, pricesError: null, credits: [], creditsError: null, creditsReady: false, playersReady: false, compensations: [], playerContacts: {}, rosterContacts: {}, historyError: '', historyHasMore: false, historyLoading: false, log: [], logError: '', confirmSeen: [], guestMatchError: '', rosterWatch: [], rosterCovered: [], rosterDates: [], statsMatches: [], statsPlayers: [], statsLoading: false, statsError: '', rosterReady: false, matchesReady: false, historyReady: false, logReady: false };
+    this.state = { matches: [], players: [], roster: [], rosterNotes: {}, suspensions: [], suspensionHistory: [], payBatches: [], behavior: [], rosterError: null, organizers: [], organizersError: null, venues: [], venuesError: null, confirmations: [], prices: null, pricesError: null, credits: [], creditsError: null, creditsReady: false, playersReady: false, compensations: [], playerContacts: {}, rosterContacts: {}, historyError: '', historyHasMore: false, historyLoading: false, log: [], logError: '', confirmSeen: [], guestMatchError: '', guestShareError: '', rosterWatch: [], rosterCovered: [], rosterDates: [], statsMatches: [], statsPlayers: [], statsLoading: false, statsError: '', rosterReady: false, matchesReady: false, historyReady: false, logReady: false };
     this._noteMoves = new Set();
     this._rosterReady = false;
     this._logRange = weekRange();
@@ -2928,6 +2928,11 @@ export class FirebaseStore {
     this.linkInvalid = false;
     const plan = guestListenPlan({ rosterId: id, today, linkKey });
     this.state.guestMatchError = '';
+    this.state.guestShareError = '';
+    this.state.shareOrganizer = null;
+    if (this._shareWaitTimer) { clearTimeout(this._shareWaitTimer); this._shareWaitTimer = 0; }
+    if (this._shareHoldTimer) { clearTimeout(this._shareHoldTimer); this._shareHoldTimer = 0; }
+    this._emit();
     this._guestBuckets = { open: [], link: [], openPlayers: [], linkPlayers: [] };
     let armedFor = null;
     const showMatches = () => {
@@ -3020,28 +3025,77 @@ export class FirebaseStore {
       } else this._swap('guest-link-players', null);
     };
     if (this._shareToken) {
-      this._swap('guest-share', onSnapshot(doc(this.db, 'shareTokens', this._shareToken), (snap) => {
+      // v261: un exists:false de la caché no es definitivo; se espera el del servidor.
+      const holdShare = () => typeof globalThis !== 'undefined' && globalThis.__F7C_HOLD_SHARE === true;
+      const shareWaitMs = typeof globalThis !== 'undefined' && Number(globalThis.__F7C_SHARE_WAIT_MS) > 0
+        ? Number(globalThis.__F7C_SHARE_WAIT_MS)
+        : SHARE_TOKEN_WAIT_MS;
+      const markShareSettled = () => {
+        if (this._shareWaitTimer) { clearTimeout(this._shareWaitTimer); this._shareWaitTimer = 0; }
+        seen.share = true;
+      };
+      const failShare = () => {
+        this.state.shareOrganizer = null;
+        this.state.guestShareError = SHARE_TOKEN_LOAD_ERROR;
+        markShareSettled();
+        // v261: los partidos no se piden si el token falló, así que publish() no
+        // llega a guestReady. Hay que emitir igual para que se vea el error.
+        this._emit();
+      };
+      const applyShareSnap = (snap) => {
         const data = snap.exists() ? snap.data() : null;
-        this.state.shareOrganizer = data?.uid ? { uid: String(data.uid), name: String(data.name || ''), token: this._shareToken } : null;
-        armMatches(this.state.shareOrganizer?.uid || '');
-        // v245: antes de mostrar la lista, saber si el dueño del link lo suspendió.
-        const owner = this.state.shareOrganizer?.uid || '';
+        const uid = data?.uid ? String(data.uid) : '';
+        const fromCache = snap.metadata?.fromCache === true;
+        const state = shareTokenSnapshotState({ exists: snap.exists(), fromCache, uid });
+        if (state === 'pending') return;
+        if (state !== 'ready') { failShare(); return; }
+        this.state.guestShareError = '';
+        this.state.shareOrganizer = { uid, name: String(data.name || ''), token: this._shareToken };
+        armMatches(uid);
         const done = () => {
           // v247: si no se pudo saber, ni la lista ni «NO TENÉS ACCESO»: un aviso para reintentar.
-          this.state.guestAccessError = !!owner && this._guestBlockOf(owner) === 'error';
-          seen.share = true;
+          this.state.guestAccessError = this._guestBlockOf(uid) === 'error';
+          markShareSettled();
           publish();
           if (this.state.guestReady) this._emit();
         };
-        if (owner) void this._checkGuestBlocks([owner]).then(done, done);
-        else done();
-      }, (error) => {
-        console.error(error?.code || 'sin-codigo', error);
-        this.state.shareOrganizer = null;
-        armMatches('');
-        seen.share = true;
-        publish();
-      }));
+        void this._checkGuestBlocks([uid]).then(done, done);
+      };
+      const queueShareSnap = (snap) => {
+        this._pendingShareSnap = snap;
+        const flush = () => {
+          if (this._guestRosterId !== id) return;
+          if (holdShare()) {
+            this._shareHoldTimer = setTimeout(flush, 50);
+            return;
+          }
+          this._shareHoldTimer = 0;
+          const next = this._pendingShareSnap;
+          this._pendingShareSnap = null;
+          if (next) applyShareSnap(next);
+        };
+        if (holdShare()) {
+          if (!this._shareHoldTimer) this._shareHoldTimer = setTimeout(flush, 50);
+          return;
+        }
+        if (this._shareHoldTimer) { clearTimeout(this._shareHoldTimer); this._shareHoldTimer = 0; }
+        this._pendingShareSnap = null;
+        applyShareSnap(snap);
+      };
+      this._shareWaitTimer = setTimeout(() => {
+        if (this._guestRosterId !== id || seen.share) return;
+        failShare();
+      }, shareWaitMs);
+      let shareTries = 0;
+      const listenShare = () => {
+        this._swap('guest-share', onSnapshot(doc(this.db, 'shareTokens', this._shareToken), { includeMetadataChanges: true }, queueShareSnap, (error) => {
+          console.error(error?.code || 'sin-codigo', error);
+          shareTries += 1;
+          if (shareTries < 2) { listenShare(); return; }
+          failShare();
+        }));
+      };
+      listenShare();
     } else {
       this.state.shareOrganizer = null;
       armMatches('');

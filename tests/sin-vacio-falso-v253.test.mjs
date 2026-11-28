@@ -78,6 +78,6 @@ test('las pantallas usan los campos y el demo (sin campos) cuenta como listo', (
 
 test('los campos de «listo» entran en la firma que decide si se redibuja', () => {
   const app = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
-  assert.match(app, /app\.guestHiddenError, app\.rosterReady, app\.matchesReady, app\.historyReady, app\.logReady\]\);/);
+  assert.match(app, /app\.guestHiddenError, app\.guestShareError, app\.shareOrganizer, app\.rosterReady, app\.matchesReady, app\.historyReady, app\.logReady\]\);/);
   assert.match(app, /location\.hash !== '#\/usuarios' \|\| usersArrived/);
 });

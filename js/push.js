@@ -16,6 +16,12 @@ export function playerPushAvailable() {
   return String(FCM_VAPID_KEY || '').trim().length > 0;
 }
 
+/** Aviso si el navegador ya bloqueó las notificaciones, sin esperar un toque. */
+export function playerPushDeniedNotice(permission) {
+  const perm = permission ?? (typeof Notification !== 'undefined' ? Notification.permission : '');
+  return perm === 'denied' ? 'El navegador no deja mostrar avisos.' : '';
+}
+
 /** En el iPhone el aviso solo llega si la página está en la pantalla de inicio. */
 export function iosPushHint() {
   if (typeof navigator === 'undefined') return '';
