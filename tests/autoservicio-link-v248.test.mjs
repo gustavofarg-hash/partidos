@@ -68,7 +68,7 @@ test('la página: «Autoservicio», el texto decidido, sin nombre de organizador
   assert.ok(page.includes(`<meta property="og:description" content="${TEXT}">`));
   assert.equal(/Gus|Gustavo|Martín|Organizá|Mis Partidos<\/title>/.test(page.replace(/<!--[\s\S]*?-->/g, '').replace(/<noscript>[\s\S]*?<\/noscript>/, '')), false);
   // Mismos íconos que la app, relativos (anda en /partidos/ y en /partidos/prueba/).
-  assert.ok(page.includes('href="../icons/apple-touch-icon.png?v=f7c-v263"'));
+  assert.ok(page.includes('href="../icons/apple-touch-icon.png?v=f7c-v264"'));
   assert.equal(/(href|src|content)="(https?:)?\/\//.test(page), false);
   // No carga la app, la hoja de estilos ni Firebase: solo salta.
   assert.equal(/styles\.css|app\.js|config\.js|firebase/i.test(page), false);
