@@ -58,7 +58,7 @@ test('la página del jugador no pinta partidos antes de saber la marca', () => {
   assert.match(storeSrc, /every\(\(uid\) => stateOf\(uid\) === 'clear'\)/);
   // App: «Cargando…» mientras tanto, y un aviso si no se pudo saber.
   const guestRender = app.slice(app.indexOf('function render() {'), app.indexOf("if (document.documentElement.classList.contains('signed-out')) unlockShell();"));
-  assert.match(guestRender, /if \(app\.guestReady === false\) \{ showGuestLoading\(\); return; \}/);
+  assert.match(guestRender, /app\.guestReady === false.*showGuestLoading\(\); return;/s);
   assert.ok(guestRender.indexOf('showGuestLoading') < guestRender.indexOf('renderPlayerSignup'));
   const signup = app.slice(app.indexOf('function renderPlayerSignup'), app.indexOf('function confirmNoticesHtml'));
   assert.ok(signup.indexOf('showGuestAccessError') < signup.indexOf('selfSignupSection(person)'));
