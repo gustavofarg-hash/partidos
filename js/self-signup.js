@@ -162,6 +162,217 @@ export function guestLinkSignupState({ token = '', organizer = null, shareError 
 export const SHARE_TOKEN_WAIT_MS = 12_000;
 export const SHARE_TOKEN_LOAD_ERROR = 'No se pudieron cargar los partidos.';
 
+/** Tope para el getDoc al servidor y para el REST, después de esperar el Listen. */
+export const SHARE_TOKEN_LOOKUP_MS = 5_000;
+
+export function shareTokenFromFields(data) {
+  const uid = String(data?.uid || '').trim();
+  if (!uid) return null;
+  return { uid, name: String(data?.name || '').trim() };
+}
+
+/** Respuesta de getDoc: un uid es listo; un miss solo de caché no cierra. */
+export function shareTokenFromServerSnap(snap) {
+  if (!snap) return { status: 'error' };
+  const exists = typeof snap.exists === 'function' ? snap.exists() : !!snap.exists;
+  const data = exists && typeof snap.data === 'function' ? snap.data() : null;
+  const found = shareTokenFromFields(data);
+  if (found) return { status: 'ready', data: found };
+  if (snap.metadata?.fromCache === true) return { status: 'pending' };
+  return { status: 'missing' };
+}
+
+export function shareTokenFromRestDocument(body) {
+  const fields = body?.fields || {};
+  return shareTokenFromFields({
+    uid: fields.uid?.stringValue || '',
+    name: fields.name?.stringValue || '',
+  });
+}
+
+export function shareTokenRestUrl({ host, ssl = true, projectId, database = '(default)', token, apiKey = '' } = {}) {
+  const h = String(host || '').trim();
+  const project = String(projectId || '').trim();
+  const tok = String(token || '').trim();
+  if (!h || !project || !tok) return '';
+  const scheme = ssl === false ? 'http' : 'https';
+  const db = String(database || '(default)');
+  const path = `${scheme}://${h}/v1/projects/${encodeURIComponent(project)}/databases/${encodeURIComponent(db)}/documents/shareTokens/${encodeURIComponent(tok)}`;
+  if (!apiKey) return path;
+  return `${path}?key=${encodeURIComponent(apiKey)}`;
+}
+
+export async function fetchShareTokenRest(opts = {}) {
+  const url = shareTokenRestUrl(opts);
+  if (!url) return { status: 'error' };
+  const run = opts.fetch || (typeof fetch === 'function' ? fetch : null);
+  if (!run) return { status: 'error' };
+  const res = await run(url, { method: 'GET', signal: opts.signal });
+  if (res.status === 404) return { status: 'missing' };
+  if (!res.ok) return { status: 'error', code: res.status };
+  let body = null;
+  try { body = await res.json(); } catch { return { status: 'error' }; }
+  const data = shareTokenFromRestDocument(body);
+  if (!data) return { status: 'missing' };
+  return { status: 'ready', data };
+}
+
+/**
+ * Después de los 12 s sin snapshot del servidor: getDoc al servidor,
+ * si no REST. Se falla solo si el servidor dice que no está, o si ambos fallan.
+ */
+export async function resolveShareTokenAfterWait({ getFromServer, getFromRest } = {}) {
+  if (typeof getFromServer === 'function') {
+    try {
+      const server = await getFromServer();
+      if (server?.status === 'ready' || server?.status === 'missing') return server;
+    } catch { /* se prueba REST */ }
+  }
+  if (typeof getFromRest === 'function') {
+    try {
+      const rest = await getFromRest();
+      if (rest?.status === 'ready' || rest?.status === 'missing') return rest;
+    } catch { /* también falló */ }
+  }
+  return { status: 'error' };
+}
+
+
+export function restValueToPlain(value) {
+  if (!value || typeof value !== 'object') return null;
+  if ('stringValue' in value) return value.stringValue;
+  if ('booleanValue' in value) return value.booleanValue === true;
+  if ('integerValue' in value) return Number(value.integerValue);
+  if ('doubleValue' in value) return Number(value.doubleValue);
+  if ('nullValue' in value) return null;
+  if ('timestampValue' in value) return value.timestampValue;
+  if ('arrayValue' in value) return (value.arrayValue.values || []).map(restValueToPlain);
+  if ('mapValue' in value) return restFieldsToPlain(value.mapValue.fields || {});
+  return null;
+}
+
+export function restFieldsToPlain(fields) {
+  const out = {};
+  for (const [key, value] of Object.entries(fields || {})) out[key] = restValueToPlain(value);
+  return out;
+}
+
+export function restDocumentToRow(doc) {
+  const name = String(doc?.name || '');
+  const id = name.split('/').filter(Boolean).pop() || '';
+  return { id, ...restFieldsToPlain(doc?.fields) };
+}
+
+export function firestoreRestDocUrl({ host, ssl = true, projectId, database = '(default)', segments = [], apiKey = '' } = {}) {
+  const h = String(host || '').trim();
+  const project = String(projectId || '').trim();
+  const parts = (segments || []).map((item) => String(item || '').trim()).filter(Boolean);
+  if (!h || !project || !parts.length) return '';
+  const scheme = ssl === false ? 'http' : 'https';
+  const db = String(database || '(default)');
+  const path = `${scheme}://${h}/v1/projects/${encodeURIComponent(project)}/databases/${encodeURIComponent(db)}/documents/${parts.map(encodeURIComponent).join('/')}`;
+  if (!apiKey) return path;
+  return `${path}?key=${encodeURIComponent(apiKey)}`;
+}
+
+export function firestoreRunQueryUrl({ host, ssl = true, projectId, database = '(default)', apiKey = '' } = {}) {
+  const h = String(host || '').trim();
+  const project = String(projectId || '').trim();
+  if (!h || !project) return '';
+  const scheme = ssl === false ? 'http' : 'https';
+  const db = String(database || '(default)');
+  const path = `${scheme}://${h}/v1/projects/${encodeURIComponent(project)}/databases/${encodeURIComponent(db)}/documents:runQuery`;
+  if (!apiKey) return path;
+  return `${path}?key=${encodeURIComponent(apiKey)}`;
+}
+
+const REST_OPS = {
+  '==': 'EQUAL',
+  '>=': 'GREATER_THAN_OR_EQUAL',
+  '<=': 'LESS_THAN_OR_EQUAL',
+  'array-contains': 'ARRAY_CONTAINS',
+};
+
+function restFilter(filter) {
+  const op = REST_OPS[filter?.op];
+  const field = String(filter?.field || '');
+  if (!op || !field) return null;
+  const value = filter?.value;
+  const raw = Array.isArray(value)
+    ? { arrayValue: { values: value.map((item) => ({ stringValue: String(item) })) } }
+    : typeof value === 'boolean'
+      ? { booleanValue: value }
+      : typeof value === 'number'
+        ? { integerValue: String(value) }
+        : { stringValue: String(value ?? '') };
+  return { fieldFilter: { field: { fieldPath: field }, op, value: raw } };
+}
+
+export function guestPlanToStructuredQuery(plan) {
+  const collection = String(plan?.collection || '').trim();
+  if (!collection) return null;
+  const filters = (plan.filters || []).map(restFilter).filter(Boolean);
+  const query = { from: [{ collectionId: collection }] };
+  if (filters.length === 1) query.where = filters[0];
+  else if (filters.length > 1) query.where = { compositeFilter: { op: 'AND', filters } };
+  const order = Array.isArray(plan.orderBy) ? plan.orderBy : [];
+  if (order.length >= 1 && order[0]) {
+    query.orderBy = [{
+      field: { fieldPath: String(order[0]) },
+      direction: String(order[1] || 'asc').toLowerCase() === 'desc' ? 'DESCENDING' : 'ASCENDING',
+    }];
+  }
+  const limit = Number(plan.limit);
+  if (Number.isInteger(limit) && limit > 0) query.limit = limit;
+  return query;
+}
+
+export async function fetchFirestoreRestDocument(opts = {}) {
+  const url = firestoreRestDocUrl(opts);
+  if (!url) return { status: 'error' };
+  const run = opts.fetch || (typeof fetch === 'function' ? fetch : null);
+  if (!run) return { status: 'error' };
+  const res = await run(url, { method: 'GET', signal: opts.signal });
+  if (res.status === 404) return { status: 'missing' };
+  if (!res.ok) return { status: 'error', code: res.status };
+  let body = null;
+  try { body = await res.json(); } catch { return { status: 'error' }; }
+  const row = restDocumentToRow(body);
+  if (!row.id) return { status: 'missing' };
+  return { status: 'ready', data: row };
+}
+
+export async function fetchFirestoreRestQuery(opts = {}) {
+  const url = firestoreRunQueryUrl(opts);
+  const structuredQuery = guestPlanToStructuredQuery(opts.plan);
+  if (!url || !structuredQuery) return { status: 'error' };
+  const run = opts.fetch || (typeof fetch === 'function' ? fetch : null);
+  if (!run) return { status: 'error' };
+  const res = await run(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ structuredQuery }),
+    signal: opts.signal,
+  });
+  if (!res.ok) return { status: 'error', code: res.status };
+  let body = null;
+  try { body = await res.json(); } catch { return { status: 'error' }; }
+  const rows = (Array.isArray(body) ? body : []).map((item) => item?.document).filter(Boolean).map(restDocumentToRow);
+  return { status: 'ready', data: rows };
+}
+
+export function withLookupTimeout(promise, ms = SHARE_TOKEN_LOOKUP_MS) {
+  const wait = Number(ms) > 0 ? Number(ms) : SHARE_TOKEN_LOOKUP_MS;
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(Object.assign(new Error('timeout'), { code: 'deadline-exceeded' })), wait);
+    Promise.resolve(promise).then(
+      (value) => { clearTimeout(t); resolve(value); },
+      (error) => { clearTimeout(t); reject(error); },
+    );
+  });
+}
+
+
 export function matchOwnedBy(match, uid) {
   const id = String(uid || '').trim();
   if (!id || !match) return false;
