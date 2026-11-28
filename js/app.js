@@ -40,7 +40,7 @@ import { compensationFingerprint, dayCompensation, reconcileTransfers, splitMode
 import { balanceTeams, bumpGoals, bumpScore, dropPlayerOn, emptyTeams, goaliesLeft, movePlayer, normalizeScore, normalizeTeams, orderTeamsByGoal, teamDragDrop, teamsBalance, teamsMessage } from './teams.js';
 import { appInstallUrl, appShareMessage, isPlayerDeepLink, organizerMatchesTitle, playerLink } from './share.js';
 import { isTrialPage } from './trial.js';
-import { canConfirmSpot, guestLinkSignupState, isSelfPending, pendingSelfSignups, selfSignupRows, SHARE_TOKEN_LOAD_ERROR, signupLimitFrom, signupLimitRecord } from './self-signup.js';
+import { canConfirmSpot, guestLinkSignupState, isSelfPending, pendingSelfSignups, selfSignupRows, SHARE_TOKEN_LOAD_ERROR, signupLimitFrom, signupLimitRecord, signedUpWithFieldLabel, signedUpWithLine } from './self-signup.js';
 import { confirmBannerText, confirmWhatsAppText, unseenConfirmations } from './confirm-notice.js';
 import { iosPushHint, playerPushAvailable, playerPushDeniedNotice, registerOrganizerPush, registerPlayerPush } from './push.js';
 import { bindTap, tapChose } from './tap.js';
@@ -54,7 +54,7 @@ import {
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v261';
+const APP_VERSION = 'f7c-v262';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -861,7 +861,7 @@ function signupStaffOptions(player, match) {
 function signupFields(player, match) {
   const { options, selected } = signupStaffOptions(player, match);
   if (!options.length) return '';
-  return `<label class="field"><span>Se anotó con:</span><select name="signedUpWith" id="signed-up-with">${options.map((item) => `<option value="${esc(item.uid)}"${item.uid === selected ? ' selected' : ''}>${esc(item.name)}</option>`).join('')}</select></label>`;
+  return `<label class="field"><span>${esc(signedUpWithFieldLabel(player))}</span><select name="signedUpWith" id="signed-up-with">${options.map((item) => `<option value="${esc(item.uid)}"${item.uid === selected ? ' selected' : ''}>${esc(item.name)}</option>`).join('')}</select></label>`;
 }
 function readSignup(root) {
   const sel = root?.matches?.('[name=signedUpWith]') ? root : root?.querySelector?.('[name=signedUpWith]');
@@ -872,9 +872,9 @@ function readSignup(root) {
   return { signedUpWith: uid, signedUpWithName: name };
 }
 function signedUpTag(player) {
-  const name = String(player?.signedUpWithName || '').trim();
-  if (!name) return '';
-  return `<span class="tag">Se anotó con: ${esc(name)}</span>`;
+  const line = signedUpWithLine(player);
+  if (!line) return '';
+  return `<span class="tag">${esc(line)}</span>`;
 }
 function playerIndex(matchId) {
   const mates = app.players.filter((item) => !matchId || item.matchId === matchId);
@@ -8362,7 +8362,7 @@ function openPlayerMenu(m, p) {
     <div class="player-panel" id="menu-panel">${panel.nickHtml}${panel.balance}${panel.err}${panel.notesHtml}${panel.statsButton}</div>
     <p class="hint">${fullNameBehind(p, app.roster) ? `<span id="menu-full-name" class="${suspendedClass(p).trim()}">${suspendedName(p, p.name)}</span> · ` : ''}${phoneView.phone ? esc(displayFromWa(phoneView.phone)) + ' · ' : phoneHidden(phoneView) ? esc(PRIVATE_WA_TEXT) + ' · ' : ''}Agregó: ${esc(p.addedBy || '?')}</p>
     <div class="menu-pay" id="menu-pay">${payLine}</div>
-    ${canAnnotate ? signupFields(p, match) : (p.signedUpWithName ? `<p class="hint" id="signed-up-line">Se anotó con: ${esc(p.signedUpWithName)}</p>` : '')}
+    ${canAnnotate ? signupFields(p, match) : (signedUpWithLine(p) ? `<p class="hint" id="signed-up-line">${esc(signedUpWithLine(p))}</p>` : '')}
     <div class="menu">
       ${canAnnotate ? `<button class="btn" id="pm-pay">${paidAlready ? 'Editar pago' : 'Cargar pago'}</button>` : ''}
       ${phoneView.phone && match ? `<a class="btn" id="pm-wa" href="${esc(waHref(phoneView.phone, waMessage(match, p)))}" target="_blank" rel="noopener"${confirmSenderAttr(p, waMessage(match, p))}>${ICON.wa}Mandar WhatsApp</a>` : phoneHidden(phoneView) ? `<button class="btn" type="button" disabled>${esc(PRIVATE_WA_TEXT)}</button>` : `<button class="btn" id="pm-phone"${own ? '' : ' disabled'}>Cargar WhatsApp</button>`}
