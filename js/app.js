@@ -54,7 +54,7 @@ import {
 } from './venues.js';
 
 /* ───────── utilidades ───────── */
-const APP_VERSION = 'f7c-v263';
+const APP_VERSION = 'f7c-v264';
 performance.mark('f7c-boot');
 if (typeof window !== 'undefined') window.__f7cMarks = { boot: Math.round(performance.now()) };
 function markOnce(name) {
@@ -837,7 +837,7 @@ function livePrices() {
   return normalizePrices(app.prices);
 }
 function addedTag(player) {
-  return `<span class="tag ${organizerTagClass(player.addedBy)}">Agregó: ${esc(player.addedBy || '?')}</span>`;
+  return `<span class="added-line"><span class="tag ${organizerTagClass(player.addedBy)}">Agregó: ${esc(player.addedBy || '?')}</span></span>`;
 }
 function signupStaffOptions(player, match) {
   const staff = staffUsers(app.users);

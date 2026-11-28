@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>v264 Agregó en su línea</title>
+  <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+<main>
+  <ul class="slots" id="slots">
+    <li class="slot" data-case="short-phone">
+      <span class="n">1</span>
+      <button type="button" class="who">
+        <div class="name-row"><div class="name">Ficticio Corto</div></div>
+        <div class="sub">
+          <span class="phone-line">+51900000001</span>
+          <span class="added-line"><span class="tag g">Agregó: Gus</span></span>
+          <span class="tag signed-up">Se anotó con: Gus</span>
+          <span class="confirm-tag ok">Confirmó</span>
+        </div>
+      </button>
+      <div class="slot-side">
+        <div class="slot-actions">
+          <a class="wa-btn" href="#" aria-hidden="true"></a>
+          <button type="button" class="pay-btn"><span class="pay-mark">$</span></button>
+        </div>
+        <button type="button" class="more-btn" aria-label="Opciones">···</button>
+      </div>
+    </li>
+    <li class="slot" data-case="no-phone">
+      <span class="n">2</span>
+      <button type="button" class="who">
+        <div class="name-row"><div class="name">Ficticio Sin Número</div></div>
+        <div class="sub">
+          <span>Sin número</span>
+          <span class="added-line"><span class="tag g">Agregó: Gus</span></span>
+          <span class="tag signed-up">Se anotó con: Gus</span>
+          <span class="confirm-tag ok">Confirmó</span>
+        </div>
+      </button>
+      <div class="slot-side">
+        <div class="slot-actions">
+          <a class="wa-btn" href="#" aria-hidden="true"></a>
+          <button type="button" class="pay-btn"><span class="pay-mark">$</span></button>
+        </div>
+        <button type="button" class="more-btn" aria-label="Opciones">···</button>
+      </div>
+    </li>
+  </ul>
+
+  <h2 class="section">Lista de espera</h2>
+  <ul class="slots" id="wait-list">
+    <li class="slot wait" data-case="short-phone">
+      <div class="arrows">
+        <button type="button" class="arrow-btn" disabled>↑</button>
+        <button type="button" class="arrow-btn" disabled>↓</button>
+      </div>
+      <span class="n">1</span>
+      <button type="button" class="who">
+        <div class="name-row"><div class="name">Ficticio Espera</div></div>
+        <div class="sub">
+          <span class="phone-line">+51900000001</span>
+          <span class="added-line"><span class="tag g">Agregó: Gus</span></span>
+          <span class="tag signed-up">Se anotó con: Gus</span>
+          <span class="confirm-tag ok">Confirmó</span>
+        </div>
+      </button>
+      <button type="button" class="btn promote-btn">Subir al partido</button>
+      <a class="wa-btn" href="#" aria-hidden="true"></a>
+      <button type="button" class="more-btn" aria-label="Opciones">···</button>
+    </li>
+  </ul>
+
+  <h2 class="section">No jugó pero pagó</h2>
+  <ul class="slots" id="no-play-list">
+    <li class="slot wait" data-case="short-phone">
+      <span class="n">1</span>
+      <button type="button" class="who">
+        <div class="name-row"><div class="name">Ficticio No Jugó</div></div>
+        <div class="sub">
+          <span class="phone-line">+51900000001</span>
+          <span class="added-line"><span class="tag g">Agregó: Gus</span></span>
+          <span class="tag signed-up">Se anotó con: Gus</span>
+        </div>
+      </button>
+      <button type="button" class="btn promote-btn">Volver al partido</button>
+      <button type="button" class="more-btn" aria-label="Opciones">···</button>
+    </li>
+    <li class="slot wait" data-case="no-phone">
+      <span class="n">2</span>
+      <button type="button" class="who">
+        <div class="name-row"><div class="name">Ficticio No Jugó Sin Número</div></div>
+        <div class="sub">
+          <span>Sin número</span>
+          <span class="added-line"><span class="tag g">Agregó: Gus</span></span>
+          <span class="tag signed-up">Se anotó con: Gus</span>
+        </div>
+      </button>
+      <button type="button" class="btn promote-btn">Volver al partido</button>
+      <button type="button" class="more-btn" aria-label="Opciones">···</button>
+    </li>
+  </ul>
+</main>
+</body>
+</html>
